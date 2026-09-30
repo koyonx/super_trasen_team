@@ -1,0 +1,57 @@
+# --- AI assistant files (project rule: never push these) ---
+CLAUDE.md
+CLAUDE.local.md
+AGENT.md
+AGENTS.md
+GEMINI.md
+.claude/
+.cursor/
+.cursorrules
+.aider*
+.codex/
+.gemini/
+
+# --- env / secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- dependencies ---
+node_modules/
+.pnpm-store/
+
+# --- build outputs ---
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+coverage/
+
+# --- generated code (regenerated via codegen) ---
+**/__generated__/
+
+# --- logs / tmp ---
+*.log
+npm-debug.log*
+pnpm-debug.log*
+tmp/
+.tmp/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# --- docker / infra local ---
+infra/certs/
+*.local.yml
+
+# --- blockchain ---
+contracts/cache/
+contracts/artifacts/
+contracts/typechain-types/
