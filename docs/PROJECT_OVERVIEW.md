@@ -190,16 +190,16 @@ subject の制約で両者は排他。以下の理由で SSR を推奨し、こ�
 | リポジトリ構成 | **モノレポ、`server/` と `client/` をディレクトリ分割**（確定） |
 | コンテナ | Docker / Docker Compose（subject 必須） |
 
-### 4.2 未確定事項（言語・フレームワーク）
+### 4.2 言語・フレームワーク（決定: TypeScript 統一 = 構成A）
 
-実装言語は未決定。候補を挙げるにとどめる（決定時に本表を更新）:
+| レイヤ | 決定 |
+|---|---|
+| client | **Next.js**（React、SSR モジュール要件を App Router の SSR で満たす）+ Tailwind CSS |
+| server | **NestJS + GraphQL (Apollo, code-first)** + Socket.IO |
+| ORM | **Prisma**（マイグレーション含む。ORM Minor 申請候補） |
+| 共有 | pnpm workspace の `packages/gungi-engine`（ルールエンジン）と `packages/shared`（型・Zod スキーマ・棋譜形式）を FE/BE/AI で共有 |
 
-| 構成案 | client | server | 備考 |
-|---|---|---|---|
-| A: TypeScript 統一 | React (Next.js で SSR) | NestJS + Apollo / Fastify + Mercurius | 型・バリデーション・ゲームエンジンを共有パッケージ化できるのが最大の利点 |
-| B: FE=TS / BE=別言語 | React/Vue/Svelte 系 | 例: Elixir(Absinthe), Go(gqlgen), Python(Strawberry) | ゲームロジックの共有は不可（BE単独実装）。WebSocket・GraphQL 対応状況を要確認 |
-
-判断材料: SSR (Minor) はメタフレームワーク採用で楽に満たせる / AI・ゲームエンジンをどこで動かすか / チームの習熟度。
+TS 統一の利点: 型・バリデーション・ゲームエンジンの単一ソース化。エンジンは server（権威判定）・client（事前検証/表示）・AI（探索）の3箇所から再利用する。
 
 ### 4.3 GraphQL と「公開 API」モジュールの両立（重要）
 
@@ -353,7 +353,7 @@ files (kifu / media, owner, acl)
 
 ## 10. 未決定事項（今後の相談リスト）
 
-1. **実装言語・フレームワーク**（§4.2 の構成A/B）
+1. ~~実装言語・フレームワーク~~ → **決定済み: TypeScript 統一（§4.2）**
 2. **AI対戦の実装方式**: 自前探索（ミニマックス+評価関数）/ 学習あり / LLM・MCP経由の既存AI活用
 3. WCAG モジュールを正式申請するか（盤面以外のUIはいずれにせよアクセシブルに作る）
 4. 検討枠（2つ目のゲーム、3D、ORM申請、2FA、カスタムモジュール）の扱い

@@ -9,10 +9,12 @@ ft_transcendence (v21.2) で必須とされる4ロールについて、subject �
 
 | 役職 | 担当者 |
 |---|---|
-| Product Owner (PO) | （未定） |
-| Project Manager (PM) / Scrum Master | （未定） |
-| Tech Lead / Architect | （未定） |
-| Developers | 全員 |
+| Product Owner (PO) | 018re18 |
+| Project Manager (PM) / Scrum Master | ryu-lion |
+| Tech Lead / Architect | koyon |
+| Developers | 全員（haru は BE 専任） |
+
+※ 具体的なタスク割りは [TASK_ASSIGNMENT.md](./TASK_ASSIGNMENT.md) を参照。
 
 ---
 
