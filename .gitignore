@@ -20,7 +20,6 @@ GEMINI.md
 
 # --- dependencies ---
 node_modules/
-.pnpm-store/
 
 # --- build outputs ---
 dist/

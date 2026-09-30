@@ -1,21 +1,18 @@
 # Build context: repository root (see docker-compose.yml)
-FROM node:22-alpine AS base
-RUN corepack enable pnpm
+FROM node:22-alpine AS deps
 WORKDIR /app
-
-FROM base AS deps
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* ./
-COPY tsconfig.base.json ./
+COPY package.json package-lock.json ./
 COPY client/package.json ./client/
 COPY server/package.json ./server/
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/gungi-engine/package.json ./packages/gungi-engine/
-RUN pnpm install --no-frozen-lockfile
+RUN npm ci
 
 FROM deps AS build
+COPY tsconfig.base.json ./
 COPY packages ./packages
 COPY client ./client
-RUN pnpm --filter @gungi/client build
+RUN npm run build -w @gungi/client
 
 FROM node:22-alpine AS runner
 ENV NODE_ENV=production

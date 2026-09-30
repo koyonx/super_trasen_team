@@ -197,7 +197,7 @@ subject の制約で両者は排他。以下の理由で SSR を推奨し、こ�
 | client | **Next.js**（React、SSR モジュール要件を App Router の SSR で満たす）+ Tailwind CSS |
 | server | **NestJS + GraphQL (Apollo, code-first)** + Socket.IO |
 | ORM | **Prisma**（マイグレーション含む。ORM Minor 申請候補） |
-| 共有 | pnpm workspace の `packages/gungi-engine`（ルールエンジン）と `packages/shared`（型・Zod スキーマ・棋譜形式）を FE/BE/AI で共有 |
+| 共有 | npm workspaces の `packages/gungi-engine`（ルールエンジン）と `packages/shared`（型・Zod スキーマ・棋譜形式）を FE/BE/AI で共有 |
 
 TS 統一の利点: 型・バリデーション・ゲームエンジンの単一ソース化。エンジンは server（権威判定）・client（事前検証/表示）・AI（探索）の3箇所から再利用する。
 

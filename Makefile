@@ -56,14 +56,14 @@ client-shell: ## Shell into the client container
 
 # ---- local (non-docker) development ----
 
-install: ## pnpm install for the whole workspace
-	pnpm install
+install: ## npm install for the whole workspace
+	npm install
 
 dev: ## Run client + server locally in watch mode
-	pnpm dev
+	npm run dev
 
 typecheck: ## Typecheck all workspace packages
-	pnpm typecheck
+	npm run typecheck
 
 test: ## Run all tests
-	pnpm test
+	npm test
