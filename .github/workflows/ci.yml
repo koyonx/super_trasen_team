@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Repo hygiene guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Forbidden files must not be tracked
+        run: |
+          forbidden=$(git ls-files | grep -E '^(CLAUDE\.md|CLAUDE\.local\.md|AGENT\.md|AGENTS\.md|GEMINI\.md|\.env(\..*)?|\.claude/|\.cursor/)' | grep -v '^\.env\.example$' || true)
+          if [ -n "$forbidden" ]; then
+            echo "::error::Forbidden files are tracked in git:"
+            echo "$forbidden"
+            exit 1
+          fi
+          echo "No forbidden files tracked."
+
+      - name: node_modules must not be tracked
+        run: |
+          if git ls-files | grep -q 'node_modules/'; then
+            echo "::error::node_modules is tracked in git"
+            exit 1
+          fi
+          echo "OK"
+
+  secrets-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  audit:
+    name: Dependency audit (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: npm audit (high and above)
+        run: npm audit --audit-level=high
+
+  lint-and-typecheck:
+    name: Lint & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check (Prettier)
+        run: npm run format:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+  test:
+    name: Test (specs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run specs
+        run: npm test
+
+  build:
+    name: Build workspaces
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build all workspaces
+        run: npm run build
+
+  docker:
+    name: Docker compose build & smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env from example
+        run: cp .env.example .env
+
+      - name: Build images
+        run: docker compose build
+
+      - name: Start stack
+        run: docker compose up -d
+
+      - name: Wait for health endpoint
+        run: |
+          for i in $(seq 1 30); do
+            if curl -skf https://localhost:8443/health > /dev/null; then
+              echo "health OK"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "health check failed"
+          docker compose logs
+          exit 1
+
+      - name: Check top page
+        run: |
+          code=$(curl -sk -o /dev/null -w '%{http_code}' https://localhost:8443/)
+          echo "top page: HTTP $code"
+          test "$code" = "200"
+
+      - name: Tear down
+        if: always()
+        run: docker compose down --volumes
