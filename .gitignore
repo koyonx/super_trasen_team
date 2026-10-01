@@ -29,8 +29,9 @@ out/
 *.tsbuildinfo
 coverage/
 
-# --- generated code (regenerated via codegen) ---
+# --- generated code (regenerated via codegen / next build) ---
 **/__generated__/
+next-env.d.ts
 
 # --- logs / tmp ---
 *.log
