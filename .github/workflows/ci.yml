@@ -10,6 +10,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  guard:
+    name: Repo hygiene guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Forbidden files must not be tracked
+        run: |
+          forbidden=$(git ls-files | grep -E '^(CLAUDE\.md|CLAUDE\.local\.md|AGENT\.md|AGENTS\.md|GEMINI\.md|\.env(\..*)?|\.claude/|\.cursor/)' | grep -v '^\.env\.example$' || true)
+          if [ -n "$forbidden" ]; then
+            echo "::error::Forbidden files are tracked in git:"
+            echo "$forbidden"
+            exit 1
+          fi
+          echo "No forbidden files tracked."
+
+      - name: node_modules must not be tracked
+        run: |
+          if git ls-files | grep -q 'node_modules/'; then
+            echo "::error::node_modules is tracked in git"
+            exit 1
+          fi
+          echo "OK"
+
+  secrets-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  audit:
+    name: Dependency audit (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: npm audit (high and above)
+        run: npm audit --audit-level=high
+
   lint-and-typecheck:
     name: Lint & Typecheck
     runs-on: ubuntu-latest
@@ -26,6 +77,9 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Format check (Prettier)
+        run: npm run format:check
 
       - name: Typecheck
         run: npm run typecheck

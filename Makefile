@@ -4,7 +4,7 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose
 
-.PHONY: help setup up build down restart clean fclean re logs logs-server logs-client ps db-shell server-shell client-shell dev install lint typecheck test ci
+.PHONY: help setup up build down restart clean fclean re logs logs-server logs-client ps db-shell server-shell client-shell dev install lint format format-check typecheck test ci
 
 help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -65,10 +65,16 @@ dev: ## Run client + server locally in watch mode
 lint: ## Lint the whole repo (ESLint)
 	npm run lint
 
+format: ## Auto-format the repo (Prettier)
+	npm run format
+
+format-check: ## Check formatting without writing (Prettier)
+	npm run format:check
+
 typecheck: ## Typecheck all workspace packages
 	npm run typecheck
 
 test: ## Run all specs (Vitest)
 	npm test
 
-ci: lint typecheck test ## Run the same checks as CI locally
+ci: lint format-check typecheck test ## Run the same checks as CI locally
