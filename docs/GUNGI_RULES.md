@@ -370,6 +370,16 @@ gungi.js 内部で食い違っている。本エンジンは合法手判定に�
   `hands`, `turn`, `placementDone`, `captured`, `ply`, `quietPlies`（§11.4 のカウンタ）, `result`。
 - すべての関数は入力状態を変更しない（イミュータブル）。
 - `positionKey(state)` は盤面・両者の持ち駒・手番から局面を一意に表す文字列を返す（棋譜・AI 用）。
+- `createPosition(setup)` は任意局面（テスト・AI・棋譜読み込み）から対局フェーズの状態を作る。
+  到達し得ない局面を作らないよう、次の不変条件を検査し、違反時は `InvalidPositionError`（`reason` にコード）を投げる。
+  投げずに検査したい場合は `positionError(setup)` が理由コードまたは `null` を返す。
+  - マス座標が盤内で重複しない／駒の種類・所有者が正しい（`INVALID_SQUARE`, `DUPLICATE_SQUARE`, `INVALID_PIECE`）
+  - スタックの高さ ≤ 3（`STACK_TOO_HIGH`、§4.1）
+  - 帥は各陣営ちょうど 1 枚（`MARSHAL_COUNT`）で、スタックの最上段にある（`MARSHAL_NOT_ON_TOP`、§4.4）
+  - 盤上の自駒 ≤ 26 枚（`ARMY_LIMIT`、§3.3）、盤上＋持ち駒が駒種ごとに §3.1 の枚数以下（`ROSTER_EXCEEDED`）
+  - 持ち駒・`quietPlies` が 0 以上の整数（`INVALID_COUNT`）
+  - 手番が `black` / `white`（`INVALID_TURN`）
+  - 砦の段は検査しない（取りにより 2・3 段目も到達可能。§4.5）
 
 ### §12.2 着手 (`Move`)
 

@@ -42,7 +42,13 @@ export { MOVE_RULES, reachableSquares } from './movement';
 export type { Direction, MoveRule, TieredRules } from './movement';
 export { ARMY_LIMIT } from './placing';
 export { createInitialState } from './setup';
-export { createPosition, positionKey } from './position';
+export {
+  InvalidPositionError,
+  PositionError,
+  createPosition,
+  positionError,
+  positionKey,
+} from './position';
 export type { PositionSetup } from './position';
 export {
   QUIET_PLY_LIMIT,

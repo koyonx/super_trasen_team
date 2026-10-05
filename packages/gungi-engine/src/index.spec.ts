@@ -23,6 +23,7 @@ describe('§12 public API', () => {
       'isGameOver',
       'inCheck',
       'positionKey',
+      'positionError',
     ] as const) {
       expect(typeof engine[name]).toBe('function');
     }
@@ -30,6 +31,11 @@ describe('§12 public API', () => {
 
   it('exposes every §12.3 error code', () => {
     expect(Object.keys(engine.MoveError)).toHaveLength(21);
+  });
+
+  it('exposes the createPosition error type', () => {
+    expect(() => engine.createPosition()).toThrow(engine.InvalidPositionError);
+    expect(Object.keys(engine.PositionError)).toHaveLength(10);
   });
 
   it('plays a short game through the public API only', () => {
