@@ -6,7 +6,7 @@
  * state untouched.
  */
 
-import { getStack } from './board';
+import { getStack, topPiece } from './board';
 import { dropMoves, executeDrop, validateDrop } from './drops';
 import { opponent } from './pieces';
 import { boardMoves, executeBoardMove, isInCheck, validateBoardMove } from './rules';
@@ -57,11 +57,9 @@ function finish(state: GameState, result: GameResult): GameState {
   return { ...state, phase: 'finished', result };
 }
 
+/** §11.1 whether the move takes the enemy marshal (only a top piece can be captured, §6.4). */
 function capturesMarshal(state: GameState, move: GameMove): boolean {
-  return (
-    move.type === 'capture' &&
-    getStack(state.board, move.to).some((p) => p.kind === 'marshal' && p.owner !== move.player)
-  );
+  return move.type === 'capture' && topPiece(getStack(state.board, move.to))?.kind === 'marshal';
 }
 
 function validatePseudo(state: GameState, move: GameMove): MoveError | null {
