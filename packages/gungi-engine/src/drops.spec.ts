@@ -139,7 +139,7 @@ describe('§7 betrayal (謀)', () => {
         at(4, 8, W('marshal')),
         at(0, 4, B('pawn')),
         at(2, 2, W('samurai')),
-        at(3, 2, W('lancer'), W('pawn')),
+        at(3, 2, W('general'), W('pawn')),
       ],
       hands: { black: { tactician: 1, ...hand } },
     });
@@ -168,11 +168,11 @@ describe('§7 betrayal (謀)', () => {
   it('may convert a subset of a multi-piece stack', () => {
     const s = tacticianSetup({ pawn: 1 });
     const next = apply(s, drop('tactician', 3, 2, 'black', [1]));
-    expect(getStack(next.board, sq(3, 2))).toEqual([W('lancer'), B('pawn'), B('tactician')]);
+    expect(getStack(next.board, sq(3, 2))).toEqual([W('general'), B('pawn'), B('tactician')]);
   });
 
   it('rejects own pieces, duplicates and out-of-range indices', () => {
-    const s = tacticianSetup({ pawn: 2, lancer: 1 });
+    const s = tacticianSetup({ pawn: 2, general: 1 });
     expect(validateDrop(s, drop('tactician', 3, 2, 'black', [1, 1]))).toBe(
       MoveError.INVALID_BETRAYAL,
     );
@@ -182,7 +182,7 @@ describe('§7 betrayal (謀)', () => {
   });
 
   it('dropMoves enumerates every affordable betrayal subset', () => {
-    const s = tacticianSetup({ pawn: 1, lancer: 1 });
+    const s = tacticianSetup({ pawn: 1, general: 1 });
     const onStack = dropMoves(s, 'black').filter(
       (m) => m.kind === 'tactician' && m.to.file === 3 && m.to.rank === 2,
     );

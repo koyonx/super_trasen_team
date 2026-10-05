@@ -35,8 +35,8 @@ describe('§9.1 initial state', () => {
     const s = createInitialState();
     expect(s.phase).toBe('placement');
     expect(s.turn).toBe('black');
-    expect(handTotal(s.hands.black)).toBe(25);
-    expect(handTotal(s.hands.white)).toBe(25);
+    expect(handTotal(s.hands.black)).toBe(38);
+    expect(handTotal(s.hands.white)).toBe(38);
     expect(s.board.flat().every((st) => st.length === 0)).toBe(true);
     expect(s.result).toBeNull();
   });
@@ -147,7 +147,7 @@ describe('§9.3 finishPlacement', () => {
     expect(s.phase).toBe('play');
     expect(s.placementDone).toEqual({ black: true, white: true });
     expect(s.turn).toBe('black');
-    expect(s.hands.black.pawn).toBe(3);
+    expect(s.hands.black.pawn).toBe(8);
   });
 
   it('a side with an empty hand is finished automatically', () => {

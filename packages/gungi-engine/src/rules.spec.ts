@@ -68,9 +68,9 @@ describe('§6.1 move to an empty square', () => {
 describe('§4.2 only the top piece moves', () => {
   it('moving the top reveals the piece below as the new top', () => {
     const s = createPosition({ stacks: [...KINGS, at(4, 4, B('fortress'), B('pawn'))] });
-    const next = play(s, mv('move', sq(4, 4), sq(4, 6)));
+    const next = play(s, mv('move', sq(4, 4), sq(4, 5)));
     expect(getStack(next.board, sq(4, 4))).toEqual([B('fortress')]);
-    expect(getStack(next.board, sq(4, 6))).toEqual([B('pawn')]);
+    expect(getStack(next.board, sq(4, 5))).toEqual([B('pawn')]);
   });
 
   it('a buried own piece cannot be moved', () => {
@@ -176,13 +176,13 @@ describe('§6.4 capture', () => {
     const s = createPosition({
       stacks: [
         ...KINGS,
-        at(4, 4, B('pawn'), B('pawn'), B('samurai')),
-        at(4, 5, W('pawn'), B('fortress'), W('lancer')),
+        at(4, 4, B('pawn'), B('pawn'), B('cannon')),
+        at(4, 5, W('pawn'), B('fortress'), W('general')),
       ],
     });
     const next = play(s, mv('capture', sq(4, 4), sq(4, 5)));
-    expect(getStack(next.board, sq(4, 5))).toEqual([B('fortress'), B('samurai')]);
-    expect([...next.captured.black].sort()).toEqual(['lancer', 'pawn']);
+    expect(getStack(next.board, sq(4, 5))).toEqual([B('fortress'), B('cannon')]);
+    expect([...next.captured.black].sort()).toEqual(['general', 'pawn']);
     expect(getStack(next.board, sq(4, 4))).toEqual([B('pawn'), B('pawn')]);
   });
 
@@ -205,9 +205,9 @@ describe('§6.4 capture', () => {
 
   it('a jumping piece captures over a blocker', () => {
     const s = createPosition({
-      stacks: [...KINGS, at(4, 2, B('cannon')), at(4, 3, W('pawn')), at(4, 5, W('general'))],
+      stacks: [...KINGS, at(4, 2, B('knight')), at(4, 3, W('pawn')), at(5, 4, W('general'))],
     });
-    expect(validateBoardMove(s, mv('capture', sq(4, 2), sq(4, 5)))).toBeNull();
+    expect(validateBoardMove(s, mv('capture', sq(4, 2), sq(5, 4)))).toBeNull();
   });
 });
 
@@ -218,7 +218,7 @@ describe('§6 boardMoves generation', () => {
         ...KINGS,
         at(4, 4, B('fortress'), B('major')),
         at(4, 5, W('pawn')),
-        at(3, 4, B('pawn')),
+        at(3, 5, B('pawn')),
         at(5, 5, W('pawn'), W('pawn'), W('pawn')),
       ],
     });
@@ -227,14 +227,14 @@ describe('§6 boardMoves generation', () => {
     for (const m of moves) expect(validateBoardMove(s, m)).toBeNull();
     expect(moves).toContainEqual(mv('capture', sq(4, 4), sq(4, 5)));
     expect(moves).toContainEqual(mv('stack', sq(4, 4), sq(4, 5)));
-    expect(moves).toContainEqual(mv('stack', sq(4, 4), sq(3, 4)));
+    expect(moves).toContainEqual(mv('stack', sq(4, 4), sq(3, 5)));
     expect(moves.some((m) => m.to.file === 5 && m.to.rank === 5)).toBe(false);
   });
 
-  it('a lone pawn in the middle has exactly two moves', () => {
+  it('a lone tier-1 pawn in the middle has exactly one move', () => {
     const s = createPosition({ stacks: [...KINGS, at(4, 4, B('pawn'))] });
     const pawnMoves = boardMoves(s, 'black').filter((m) => m.from.file === 4);
-    expect(pawnMoves).toHaveLength(2);
+    expect(pawnMoves).toEqual([mv('move', sq(4, 4), sq(4, 5))]);
   });
 });
 

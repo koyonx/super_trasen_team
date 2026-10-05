@@ -17,7 +17,6 @@ export const PIECE_KINDS = [
   'lieutenant',
   'major',
   'samurai',
-  'lancer',
   'knight',
   'shinobi',
   'fortress',

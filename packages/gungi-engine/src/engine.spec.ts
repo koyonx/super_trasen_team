@@ -15,6 +15,12 @@ const mv = (
   player: PlayerSide = 'black',
 ): BoardMove => ({ type, player, from: sq(...from), to: sq(...to) });
 
+/** A tier-3 cannon tower: slides orthogonally to the board edge (§5.3.10). */
+const rook = (file: number, rank: number, side: PlayerSide) => {
+  const P = side === 'black' ? B : W;
+  return at(file, rank, P('general'), P('general'), P('cannon'));
+};
+
 function play(state: GameState, ...moves: Move[]): GameState {
   return moves.reduce((s, m) => {
     const r = applyMove(s, m);
@@ -36,8 +42,8 @@ describe('§10.1 self-check is rejected', () => {
     const s = createPosition({
       stacks: [
         at(4, 0, B('marshal')),
-        at(4, 1, B('samurai')),
-        at(4, 8, W('general')),
+        at(4, 1, B('general')),
+        rook(4, 8, 'white'),
         at(0, 8, W('marshal')),
       ],
     });
@@ -50,7 +56,7 @@ describe('§10.1 self-check is rejected', () => {
       stacks: [
         at(4, 0, B('marshal')),
         at(0, 3, B('pawn')),
-        at(4, 8, W('general')),
+        rook(4, 8, 'white'),
         at(0, 8, W('marshal')),
       ],
       hands: { black: { pawn: 1 } },
@@ -68,8 +74,8 @@ describe('§10.1 self-check is rejected', () => {
     const s = createPosition({
       stacks: [
         at(4, 0, B('marshal')),
-        at(0, 4, B('general')),
-        at(4, 8, W('general')),
+        rook(0, 4, 'black'),
+        rook(4, 8, 'white'),
         at(0, 8, W('marshal')),
       ],
     });
@@ -91,50 +97,41 @@ describe('§11.1 marshal capture', () => {
   });
 });
 
+/**
+ * Black marshal in the corner. White stacks a cannon onto a 2-high stack on
+ * file 0 (becoming a tier-3 slider) while another tier-3 cannon holds file 1.
+ */
+const MATE_NET = [
+  at(0, 0, B('marshal')),
+  at(0, 5, W('general'), W('general')),
+  rook(2, 5, 'white'),
+  rook(1, 7, 'white'),
+  at(8, 8, W('marshal')),
+];
+const MATING_MOVE = mv('stack', [2, 5], [0, 5], 'white');
+
 describe('§11.2 checkmate', () => {
   it('detects mate after the mating move', () => {
-    const s = createPosition({
-      stacks: [
-        at(0, 0, B('marshal')),
-        at(0, 5, W('general')),
-        at(2, 5, W('general')),
-        at(8, 8, W('marshal')),
-      ],
-      turn: 'white',
-    });
-    const next = play(s, mv('move', [2, 5], [1, 5], 'white'));
+    const s = createPosition({ stacks: MATE_NET, turn: 'white' });
+    expect(inCheck({ ...s, turn: 'black' })).toBe(false);
+    const next = play(s, MATING_MOVE);
     expect(next.result).toEqual({ winner: 'white', reason: 'checkmate' });
     expect(legalMoves(next)).toEqual([]);
   });
 
   it('§8.2 a hand piece cannot block outside the drop zone, so it is still mate', () => {
-    const s = createPosition({
-      stacks: [
-        at(0, 0, B('marshal')),
-        at(0, 5, W('general')),
-        at(2, 5, W('general')),
-        at(8, 8, W('marshal')),
-      ],
-      hands: { black: { pawn: 1 } },
-      turn: 'white',
-    });
-    const next = play(s, mv('move', [2, 5], [1, 5], 'white'));
+    const s = createPosition({ stacks: MATE_NET, hands: { black: { pawn: 1 } }, turn: 'white' });
+    const next = play(s, MATING_MOVE);
     expect(next.result).toEqual({ winner: 'white', reason: 'checkmate' });
   });
 
   it('a hand piece that can block inside the drop zone prevents mate', () => {
     const s = createPosition({
-      stacks: [
-        at(0, 0, B('marshal')),
-        at(8, 3, B('pawn')),
-        at(0, 5, W('general')),
-        at(2, 5, W('general')),
-        at(8, 8, W('marshal')),
-      ],
+      stacks: [...MATE_NET, at(8, 3, B('pawn'))],
       hands: { black: { pawn: 1 } },
       turn: 'white',
     });
-    const next = play(s, mv('move', [2, 5], [1, 5], 'white'));
+    const next = play(s, MATING_MOVE);
     expect(next.result).toBeNull();
     const drop = (rank: number): Move => ({
       type: 'drop',
@@ -151,8 +148,8 @@ describe('§11.3 stalemate', () => {
     const s = createPosition({
       stacks: [
         at(0, 0, B('marshal')),
-        at(1, 5, W('general')),
-        at(8, 1, W('general')),
+        rook(1, 5, 'white'),
+        rook(8, 1, 'white'),
         at(5, 5, W('pawn')),
         at(8, 8, W('marshal')),
       ],
@@ -294,12 +291,12 @@ describe('random self-play invariants', () => {
       // JSON round-trip safe.
       expect(JSON.parse(JSON.stringify(state))).toEqual(state);
       for (const side of ['black', 'white'] as const) {
-        // Piece conservation: board + hand + removed by opponent = 25.
+        // Piece conservation: board + hand + removed by opponent = 38.
         expect(
           piecesOf(state, side) +
             handTotal(state.hands[side]) +
             state.captured[opponent(side)].length,
-        ).toBe(25);
+        ).toBe(38);
       }
       // No stack exceeds 3 and nothing sits on a marshal.
       for (const s of allSquares()) {

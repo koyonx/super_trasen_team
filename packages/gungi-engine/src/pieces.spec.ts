@@ -3,26 +3,25 @@ import { PIECE_GLYPHS, ROSTER, emptyHand, handTotal, opponent, withHandDelta } f
 import { PIECE_KINDS } from './types';
 
 describe('§3.1 piece roster', () => {
-  it('defines 14 piece kinds', () => {
-    expect(PIECE_KINDS).toHaveLength(14);
+  it('defines 13 piece kinds', () => {
+    expect(PIECE_KINDS).toHaveLength(13);
   });
 
-  it('gives each player 25 pieces', () => {
-    expect(handTotal(ROSTER)).toBe(25);
+  it('gives each player 38 pieces', () => {
+    expect(handTotal(ROSTER)).toBe(38);
   });
 
   it.each([
     ['marshal', 1],
-    ['general', 1],
-    ['lieutenant', 1],
-    ['major', 2],
+    ['general', 6],
+    ['lieutenant', 4],
+    ['major', 4],
     ['samurai', 2],
-    ['lancer', 3],
     ['knight', 2],
     ['shinobi', 2],
     ['fortress', 2],
-    ['pawn', 4],
-    ['cannon', 1],
+    ['pawn', 9],
+    ['cannon', 2],
     ['archer', 2],
     ['musket', 1],
     ['tactician', 1],
@@ -32,7 +31,7 @@ describe('§3.1 piece roster', () => {
 
   it('maps every kind to a unique glyph', () => {
     const glyphs = PIECE_KINDS.map((k) => PIECE_GLYPHS[k]);
-    expect(new Set(glyphs).size).toBe(14);
+    expect(new Set(glyphs).size).toBe(13);
   });
 });
 
