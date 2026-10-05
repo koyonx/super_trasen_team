@@ -14,7 +14,12 @@ export type MoveRule =
   /** §5.1 step up to `range` squares (extended by tier, §5.2). */
   | { readonly kind: 'step'; readonly dir: Direction; readonly range: number }
   /** §5.1 slide any distance (not affected by tier). */
-  | { readonly kind: 'slide'; readonly dir: Direction };
+  | { readonly kind: 'slide'; readonly dir: Direction }
+  /**
+   * §5.1 jump straight to `offset`, ignoring pieces in between. Each extra tier
+   * adds one more landing square further forward (§5.2).
+   */
+  | { readonly kind: 'jump'; readonly offset: Direction };
 
 const F: Direction = [0, 1];
 const B: Direction = [0, -1];
@@ -31,6 +36,8 @@ const DIAGONAL = [FL, FR, BL, BR] as const;
 const step = (range: number, ...dirs: Direction[]): MoveRule[] =>
   dirs.map((dir) => ({ kind: 'step', dir, range }));
 const slide = (...dirs: Direction[]): MoveRule[] => dirs.map((dir) => ({ kind: 'slide', dir }));
+const jump = (...offsets: Direction[]): MoveRule[] =>
+  offsets.map((offset) => ({ kind: 'jump', offset }));
 
 /** §5.3 movement table at tier 1. */
 export const MOVE_RULES: Readonly<Record<PieceKind, readonly MoveRule[]>> = {
@@ -44,9 +51,9 @@ export const MOVE_RULES: Readonly<Record<PieceKind, readonly MoveRule[]>> = {
   shinobi: step(2, ...DIAGONAL),
   fortress: step(1, F, L, R, BL, BR),
   pawn: step(1, F, B),
-  cannon: step(1, L, R, B),
-  archer: step(1, B),
-  musket: step(1, BL, BR),
+  cannon: [...jump([0, 3]), ...step(1, L, R, B)],
+  archer: [...jump([0, 2], [-1, 2], [1, 2]), ...step(1, B)],
+  musket: [...jump([0, 2]), ...step(1, BL, BR)],
   tactician: step(1, FL, FR, B),
 };
 
@@ -68,6 +75,15 @@ export function reachableSquares(board: Board, from: Square, piece: Piece, tier:
   };
 
   for (const rule of MOVE_RULES[piece.kind]) {
+    if (rule.kind === 'jump') {
+      const [df, dr] = rule.offset;
+      for (let k = 0; k < tier; k++) {
+        const file = from.file + df * s;
+        const rank = from.rank + (dr + k) * s;
+        if (isOnBoard(file, rank)) push(file, rank);
+      }
+      continue;
+    }
     const [df, dr] = rule.dir;
     const max = rule.kind === 'slide' ? Infinity : rule.range + tier - 1;
     for (let k = 1; k <= max; k++) {

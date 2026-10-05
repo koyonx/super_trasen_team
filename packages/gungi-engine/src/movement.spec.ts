@@ -199,3 +199,67 @@ describe('§5.1 step blocking and board edges', () => {
     expect(r).toEqual(offsets(...ray(0, 1, 3), ...ray(1, 0, 3), ...ray(1, 1, 3)));
   });
 });
+
+describe('§5.3.11 砲 cannon', () => {
+  it('tier 1: jumps exactly 3 forward, steps L, R, B', () => {
+    expect(reach('cannon')).toEqual(offsets([0, 3], [-1, 0], [1, 0], [0, -1]));
+  });
+  it('tier 2: lands 3 or 4 forward, steps up to 2', () => {
+    expect(reach('cannon', 2)).toEqual(
+      offsets([0, 3], [0, 4], ...ray(-1, 0, 2), ...ray(1, 0, 2), ...ray(0, -1, 2)),
+    );
+  });
+  it('tier 3: lands 3..5 forward (clipped by the board edge)', () => {
+    const r = reach('cannon', 3, 'black', (b) => b, { file: 4, rank: 3 });
+    expect(r.filter((o) => o.startsWith('0,') && !o.startsWith('0,-'))).toEqual(
+      offsets([0, 3], [0, 4], [0, 5]),
+    );
+  });
+  it('jumps over pieces of any height in between', () => {
+    const r = reach('cannon', 1, 'black', (b) =>
+      setStack(b, { file: 4, rank: 5 }, [
+        { kind: 'pawn', owner: 'white' },
+        { kind: 'pawn', owner: 'white' },
+        { kind: 'pawn', owner: 'white' },
+      ]),
+    );
+    expect(r).toContain('0,3');
+  });
+});
+
+describe('§5.3.12 弓 archer', () => {
+  it('tier 1: jumps to (0,+2), (±1,+2), steps B', () => {
+    expect(reach('archer')).toEqual(offsets([0, 2], [-1, 2], [1, 2], [0, -1]));
+  });
+  it('tier 2: landing rows +2 and +3, B up to 2', () => {
+    expect(reach('archer', 2)).toEqual(
+      offsets([0, 2], [0, 3], [-1, 2], [-1, 3], [1, 2], [1, 3], ...ray(0, -1, 2)),
+    );
+  });
+  it('jumps over the square in front', () => {
+    const r = reach('archer', 1, 'black', (b) =>
+      setStack(b, { file: 4, rank: 5 }, [{ kind: 'general', owner: 'white' }]),
+    );
+    expect(r).toContain('0,2');
+    expect(r).not.toContain('0,1');
+  });
+});
+
+describe('§5.3.13 筒 musket', () => {
+  it('tier 1: jumps 2 forward, steps BL, BR', () => {
+    expect(reach('musket')).toEqual(offsets([0, 2], [-1, -1], [1, -1]));
+  });
+  it('tier 3: lands 2..4 forward, back diagonals up to 3', () => {
+    expect(reach('musket', 3)).toEqual(
+      offsets([0, 2], [0, 3], [0, 4], ...ray(-1, -1, 3), ...ray(1, -1, 3)),
+    );
+  });
+  it('white musket jumps toward lower ranks', () => {
+    const at = { file: 4, rank: 6 };
+    const board = setStack(createEmptyBoard(), at, [{ kind: 'musket', owner: 'white' }]);
+    expect(reachableSquares(board, at, { kind: 'musket', owner: 'white' }, 1)).toContainEqual({
+      file: 4,
+      rank: 4,
+    });
+  });
+});
