@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getStack } from './board';
+import { createEmptyBoard, getStack, setStack } from './board';
 import { createPosition } from './position';
 import { boardMoves, executeBoardMove, isInCheck, validateBoardMove } from './rules';
 import { B, W, at, sq } from './test-helpers';
@@ -455,7 +455,7 @@ describe('§10.1 check detection', () => {
   });
 
   it('a side without a marshal is never in check', () => {
-    const board = createPosition({ stacks: [at(4, 4, W('pawn'))] }).board;
+    const board = setStack(createEmptyBoard(), sq(4, 4), [W('pawn')]);
     expect(isInCheck(board, 'black')).toBe(false);
   });
 });

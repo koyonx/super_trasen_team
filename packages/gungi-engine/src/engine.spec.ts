@@ -215,15 +215,14 @@ describe('§11.2 checkmate', () => {
   });
 
   it('§8.4 a pawn drop may deliver mate', () => {
-    const full = (file: number, rank: number) =>
-      at(file, rank, B('general'), B('general'), B('musket'));
+    // Full stacks wall the marshal in; none of their tops reaches (0, 8).
     const s = createPosition({
       stacks: [
         at(0, 7, B('marshal')),
-        full(0, 6),
-        full(1, 6),
-        full(1, 7),
-        full(1, 8),
+        at(0, 6, B('general'), B('general'), B('pawn')),
+        at(1, 6, B('general'), B('general'), B('major')),
+        at(1, 7, B('general'), B('general'), B('musket')),
+        at(1, 8, B('lieutenant'), B('lieutenant'), B('pawn')),
         at(2, 6, W('general'), W('samurai')),
         at(8, 0, W('marshal')),
       ],
@@ -335,7 +334,7 @@ describe('§12.1 state data', () => {
   });
 
   it('createPosition builds a play-phase state', () => {
-    const s = createPosition();
+    const s = createPosition({ stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))] });
     expect(s.phase).toBe('play');
     expect(s.turn).toBe('black');
     expect(s.quietPlies).toBe(0);
