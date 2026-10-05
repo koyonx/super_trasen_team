@@ -1,0 +1,315 @@
+import { describe, expect, it } from 'vitest';
+import { allSquares, getStack } from './board';
+import { applyMove, inCheck, isGameOver, legalMoves, validateMove } from './engine';
+import { handTotal, opponent } from './pieces';
+import { createPosition } from './position';
+import { createInitialState } from './setup';
+import { B, W, at, sq } from './test-helpers';
+import type { BoardMove, GameState, Move, PlayerSide } from './types';
+import { MoveError } from './types';
+
+const mv = (
+  type: BoardMove['type'],
+  from: [number, number],
+  to: [number, number],
+  player: PlayerSide = 'black',
+): BoardMove => ({ type, player, from: sq(...from), to: sq(...to) });
+
+function play(state: GameState, ...moves: Move[]): GameState {
+  return moves.reduce((s, m) => {
+    const r = applyMove(s, m);
+    if (!r.ok) throw new Error(`unexpected ${r.error} for ${JSON.stringify(m)}`);
+    return r.state;
+  }, state);
+}
+
+describe('§10.1 self-check is rejected', () => {
+  it('a marshal cannot step onto an attacked square', () => {
+    const s = createPosition({
+      stacks: [at(4, 0, B('marshal')), at(5, 2, W('pawn')), at(8, 8, W('marshal'))],
+    });
+    expect(validateMove(s, mv('move', [4, 0], [5, 1]))).toBe(MoveError.SELF_CHECK);
+    expect(validateMove(s, mv('move', [4, 0], [3, 1]))).toBeNull();
+  });
+
+  it('a pinned piece cannot leave the line of attack', () => {
+    const s = createPosition({
+      stacks: [
+        at(4, 0, B('marshal')),
+        at(4, 1, B('samurai')),
+        at(4, 8, W('general')),
+        at(0, 8, W('marshal')),
+      ],
+    });
+    expect(validateMove(s, mv('move', [4, 1], [3, 2]))).toBe(MoveError.SELF_CHECK);
+    expect(validateMove(s, mv('move', [4, 1], [4, 2]))).toBeNull();
+  });
+
+  it('when in check, only escaping moves are legal', () => {
+    const s = createPosition({
+      stacks: [
+        at(4, 0, B('marshal')),
+        at(0, 3, B('pawn')),
+        at(4, 8, W('general')),
+        at(0, 8, W('marshal')),
+      ],
+      hands: { black: { pawn: 1 } },
+    });
+    expect(inCheck(s)).toBe(true);
+    const moves = legalMoves(s);
+    expect(moves.length).toBeGreaterThan(0);
+    expect(moves).not.toContainEqual(mv('move', [0, 3], [0, 4]));
+    // Blocking by drop is allowed.
+    expect(moves).toContainEqual({ type: 'drop', player: 'black', kind: 'pawn', to: sq(4, 2) });
+    for (const m of moves) expect(validateMove(s, m)).toBeNull();
+  });
+
+  it('capturing the enemy marshal is allowed even if own marshal is exposed', () => {
+    const s = createPosition({
+      stacks: [
+        at(4, 0, B('marshal')),
+        at(0, 4, B('general')),
+        at(4, 8, W('general')),
+        at(0, 8, W('marshal')),
+      ],
+    });
+    const next = play(s, mv('capture', [0, 4], [0, 8]));
+    expect(next.result).toEqual({ winner: 'black', reason: 'marshalCaptured' });
+  });
+});
+
+describe('§11.1 marshal capture', () => {
+  it('ends the game and records the capture', () => {
+    const s = createPosition({
+      stacks: [at(0, 0, B('marshal')), at(4, 4, B('pawn')), at(4, 5, W('marshal'))],
+    });
+    const next = play(s, mv('capture', [4, 4], [4, 5]));
+    expect(isGameOver(next)).toBe(true);
+    expect(next.phase).toBe('finished');
+    expect(next.result).toEqual({ winner: 'black', reason: 'marshalCaptured' });
+    expect(next.captured.black).toContain('marshal');
+  });
+});
+
+describe('§11.2 checkmate', () => {
+  it('detects mate after the mating move', () => {
+    const s = createPosition({
+      stacks: [
+        at(0, 0, B('marshal')),
+        at(0, 5, W('general')),
+        at(2, 5, W('general')),
+        at(8, 8, W('marshal')),
+      ],
+      turn: 'white',
+    });
+    const next = play(s, mv('move', [2, 5], [1, 5], 'white'));
+    expect(next.result).toEqual({ winner: 'white', reason: 'checkmate' });
+    expect(legalMoves(next)).toEqual([]);
+  });
+
+  it('§8.2 a hand piece cannot block outside the drop zone, so it is still mate', () => {
+    const s = createPosition({
+      stacks: [
+        at(0, 0, B('marshal')),
+        at(0, 5, W('general')),
+        at(2, 5, W('general')),
+        at(8, 8, W('marshal')),
+      ],
+      hands: { black: { pawn: 1 } },
+      turn: 'white',
+    });
+    const next = play(s, mv('move', [2, 5], [1, 5], 'white'));
+    expect(next.result).toEqual({ winner: 'white', reason: 'checkmate' });
+  });
+
+  it('a hand piece that can block inside the drop zone prevents mate', () => {
+    const s = createPosition({
+      stacks: [
+        at(0, 0, B('marshal')),
+        at(8, 3, B('pawn')),
+        at(0, 5, W('general')),
+        at(2, 5, W('general')),
+        at(8, 8, W('marshal')),
+      ],
+      hands: { black: { pawn: 1 } },
+      turn: 'white',
+    });
+    const next = play(s, mv('move', [2, 5], [1, 5], 'white'));
+    expect(next.result).toBeNull();
+    const drop = (rank: number): Move => ({
+      type: 'drop',
+      player: 'black',
+      kind: 'pawn',
+      to: sq(0, rank),
+    });
+    expect(legalMoves(next)).toEqual([drop(1), drop(2), drop(3)]);
+  });
+});
+
+describe('§11.3 stalemate', () => {
+  it('a side with no legal move and not in check loses', () => {
+    const s = createPosition({
+      stacks: [
+        at(0, 0, B('marshal')),
+        at(1, 5, W('general')),
+        at(8, 1, W('general')),
+        at(5, 5, W('pawn')),
+        at(8, 8, W('marshal')),
+      ],
+      turn: 'white',
+    });
+    const next = play(s, mv('move', [5, 5], [5, 4], 'white'));
+    expect(next.result).toEqual({ winner: 'white', reason: 'stalemate' });
+  });
+});
+
+describe('§11.4 repetition', () => {
+  it('the 4th occurrence of a position is a draw', () => {
+    let s = createPosition({ stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))] });
+    const cycle: Move[] = [
+      mv('move', [0, 0], [0, 1]),
+      mv('move', [8, 8], [8, 7], 'white'),
+      mv('move', [0, 1], [0, 0]),
+      mv('move', [8, 7], [8, 8], 'white'),
+    ];
+    s = play(s, ...cycle, ...cycle);
+    expect(s.result).toBeNull();
+    s = play(s, ...cycle.slice(0, 3));
+    expect(s.result).toBeNull();
+    s = play(s, cycle[3]!);
+    expect(s.result).toEqual({ winner: null, reason: 'repetition' });
+    expect(s.ply).toBe(12);
+  });
+});
+
+describe('§11.5–§11.7 resignation, timeout, agreement', () => {
+  const s = createPosition({ stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))] });
+
+  it('either side may resign regardless of turn', () => {
+    expect(play(s, { type: 'resign', player: 'white' }).result).toEqual({
+      winner: 'black',
+      reason: 'resignation',
+    });
+    expect(play(s, { type: 'resign', player: 'black' }).result?.winner).toBe('white');
+  });
+
+  it('resignation is possible during placement', () => {
+    expect(play(createInitialState(), { type: 'resign', player: 'black' }).phase).toBe('finished');
+  });
+
+  it('timeout makes the given side lose', () => {
+    expect(play(s, { type: 'timeout', player: 'black' }).result).toEqual({
+      winner: 'white',
+      reason: 'timeout',
+    });
+  });
+
+  it('agreed draw has no winner', () => {
+    expect(play(s, { type: 'agreeDraw' }).result).toEqual({ winner: null, reason: 'agreement' });
+  });
+});
+
+describe('§11.8 finished games', () => {
+  it('rejects every move after the end', () => {
+    const done = play(
+      createPosition({ stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))] }),
+      { type: 'resign', player: 'black' },
+    );
+    expect(validateMove(done, mv('move', [0, 0], [0, 1]))).toBe(MoveError.GAME_FINISHED);
+    expect(validateMove(done, { type: 'agreeDraw' })).toBe(MoveError.GAME_FINISHED);
+    expect(legalMoves(done)).toEqual([]);
+  });
+});
+
+describe('§12.2 malformed input', () => {
+  const s = createPosition({ stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))] });
+  it.each([
+    null,
+    42,
+    {},
+    { type: 'teleport', player: 'black' },
+    { type: 'resign', player: 'red' },
+    { type: 'move', player: 'black', from: sq(0, 0), to: sq(0, 1), betray: 'x' },
+  ])('rejects %j', (bad) => {
+    expect(validateMove(s, bad as unknown as Move)).toBe(MoveError.INVALID_MOVE);
+  });
+
+  it('rejects a board move missing squares', () => {
+    expect(validateMove(s, { type: 'move', player: 'black' } as unknown as Move)).toBe(
+      MoveError.INVALID_SQUARE,
+    );
+  });
+});
+
+describe('§9 → §11 lifecycle', () => {
+  it('placement transitions to play with black to move', () => {
+    const s = play(
+      createInitialState(),
+      { type: 'place', player: 'black', kind: 'marshal', to: sq(4, 0) },
+      { type: 'place', player: 'white', kind: 'marshal', to: sq(4, 8) },
+      { type: 'place', player: 'black', kind: 'pawn', to: sq(4, 2) },
+      { type: 'finishPlacement', player: 'white' },
+    );
+    expect(s.phase).toBe('play');
+    expect(s.turn).toBe('black');
+    expect(legalMoves(s).length).toBeGreaterThan(0);
+  });
+});
+
+/** Deterministic PRNG (mulberry32). */
+function rng(seed: number): () => number {
+  let a = seed;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function piecesOf(state: GameState, side: PlayerSide): number {
+  return allSquares().reduce(
+    (n, s) => n + getStack(state.board, s).filter((p) => p.owner === side).length,
+    0,
+  );
+}
+
+describe('random self-play invariants', () => {
+  it.each([1, 2, 3])('seed %i: every legal move applies and invariants hold', (seed) => {
+    const rand = rng(seed);
+    let state = createInitialState();
+    for (let i = 0; i < 160 && !isGameOver(state); i++) {
+      const moves = legalMoves(state);
+      expect(moves.length).toBeGreaterThan(0);
+      // Prefer finishing placement early sometimes so the play phase is reached.
+      const finishMove = moves.find((m) => m.type === 'finishPlacement');
+      const move =
+        finishMove && rand() < 0.15 ? finishMove : moves[Math.floor(rand() * moves.length)]!;
+      const result = applyMove(state, move);
+      expect(result.ok).toBe(true);
+      if (!result.ok) break;
+      state = result.state;
+
+      // JSON round-trip safe.
+      expect(JSON.parse(JSON.stringify(state))).toEqual(state);
+      for (const side of ['black', 'white'] as const) {
+        // Piece conservation: board + hand + removed by opponent = 25.
+        expect(
+          piecesOf(state, side) +
+            handTotal(state.hands[side]) +
+            state.captured[opponent(side)].length,
+        ).toBe(25);
+      }
+      // No stack exceeds 3 and nothing sits on a marshal.
+      for (const s of allSquares()) {
+        const stack = getStack(state.board, s);
+        expect(stack.length).toBeLessThanOrEqual(3);
+        stack.slice(0, -1).forEach((p) => expect(p.kind).not.toBe('marshal'));
+      }
+      // The side that just moved is never left in check (unless the game ended).
+      if (state.phase === 'play')
+        expect(inCheck({ ...state, turn: opponent(state.turn) })).toBe(false);
+    }
+  });
+});
