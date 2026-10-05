@@ -37,10 +37,10 @@ export type {
 export { MoveError, PIECE_KINDS } from './types';
 
 export { PIECE_GLYPHS, ROSTER, opponent } from './pieces';
-export { getStack, topPiece, isInTerritory } from './board';
+export { getStack, topPiece, isInDropZone, isInTerritory } from './board';
 export { MOVE_RULES, reachableSquares } from './movement';
-export type { Direction, MoveRule } from './movement';
-export { frontLineRank, isInDropZone } from './drops';
+export type { Direction, MoveRule, TieredRules } from './movement';
+export { ARMY_LIMIT } from './placing';
 export { createInitialState } from './setup';
 export { createPosition, positionKey } from './position';
 export type { PositionSetup } from './position';

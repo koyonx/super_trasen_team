@@ -119,18 +119,8 @@ describe('§11.2 checkmate', () => {
     expect(legalMoves(next)).toEqual([]);
   });
 
-  it('§8.2 a hand piece cannot block outside the drop zone, so it is still mate', () => {
+  it('§8.2 a hand piece dropped inside the six-rank zone can block, preventing mate', () => {
     const s = createPosition({ stacks: MATE_NET, hands: { black: { pawn: 1 } }, turn: 'white' });
-    const next = play(s, MATING_MOVE);
-    expect(next.result).toEqual({ winner: 'white', reason: 'checkmate' });
-  });
-
-  it('a hand piece that can block inside the drop zone prevents mate', () => {
-    const s = createPosition({
-      stacks: [...MATE_NET, at(8, 3, B('pawn'))],
-      hands: { black: { pawn: 1 } },
-      turn: 'white',
-    });
     const next = play(s, MATING_MOVE);
     expect(next.result).toBeNull();
     const drop = (rank: number): Move => ({
@@ -139,7 +129,38 @@ describe('§11.2 checkmate', () => {
       kind: 'pawn',
       to: sq(0, rank),
     });
-    expect(legalMoves(next)).toEqual([drop(1), drop(2), drop(3)]);
+    expect(legalMoves(next)).toEqual([drop(1), drop(2), drop(3), drop(4)]);
+  });
+
+  it('§8.3 the pawn file rule can leave a check unblockable', () => {
+    const s = createPosition({
+      stacks: [...MATE_NET, at(0, 7, B('pawn'))],
+      hands: { black: { pawn: 1 } },
+      turn: 'white',
+    });
+    const next = play(s, MATING_MOVE);
+    expect(next.result).toEqual({ winner: 'white', reason: 'checkmate' });
+  });
+
+  it('§8.4 a pawn drop may deliver mate', () => {
+    const full = (file: number, rank: number) =>
+      at(file, rank, B('general'), B('general'), B('musket'));
+    const s = createPosition({
+      stacks: [
+        at(0, 7, B('marshal')),
+        full(0, 6),
+        full(1, 6),
+        full(1, 7),
+        full(1, 8),
+        at(2, 6, W('general'), W('samurai')),
+        at(8, 0, W('marshal')),
+      ],
+      hands: { white: { pawn: 1 } },
+      turn: 'white',
+    });
+    expect(inCheck({ ...s, turn: 'black' })).toBe(false);
+    const next = play(s, { type: 'drop', player: 'white', kind: 'pawn', to: sq(0, 8) });
+    expect(next.result).toEqual({ winner: 'white', reason: 'checkmate' });
   });
 });
 
