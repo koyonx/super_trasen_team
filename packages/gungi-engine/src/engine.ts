@@ -11,7 +11,8 @@ import { dropMoves, executeDrop, validateDrop } from './drops';
 import { opponent } from './pieces';
 import { positionKey } from './position';
 import { boardMoves, executeBoardMove, isInCheck, validateBoardMove } from './rules';
-import { applyPlacementMove, placementMoves } from './setup';
+import type { PlacementMove } from './setup';
+import { executePlacementMove, placementMoves, validatePlacementMove } from './setup';
 import type {
   BoardMove,
   DropMove,
@@ -22,6 +23,9 @@ import type {
   PlayerSide,
 } from './types';
 import { MoveError } from './types';
+
+/** Moves that change the board or the phase (everything but terminal actions). */
+type GameMove = PlacementMove | BoardMove | DropMove;
 
 const MOVE_TYPES: ReadonlySet<string> = new Set([
   'place',
@@ -51,31 +55,60 @@ function finish(state: GameState, result: GameResult): GameState {
   return { ...state, phase: 'finished', result };
 }
 
-function capturesMarshal(state: GameState, move: BoardMove): boolean {
+function capturesMarshal(state: GameState, move: GameMove): boolean {
   return (
     move.type === 'capture' &&
     getStack(state.board, move.to).some((p) => p.kind === 'marshal' && p.owner !== move.player)
   );
 }
 
-/** Pseudo-legal play-phase moves for the side to move. */
-function pseudoMoves(state: GameState): (BoardMove | DropMove)[] {
+function validatePseudo(state: GameState, move: GameMove): MoveError | null {
+  switch (move.type) {
+    case 'place':
+    case 'finishPlacement':
+      return validatePlacementMove(state, move);
+    case 'drop':
+      return validateDrop(state, move);
+    default:
+      return validateBoardMove(state, move);
+  }
+}
+
+function execute(state: GameState, move: GameMove): GameState {
+  switch (move.type) {
+    case 'place':
+    case 'finishPlacement':
+      return executePlacementMove(state, move);
+    case 'drop':
+      return executeDrop(state, move);
+    default:
+      return executeBoardMove(state, move);
+  }
+}
+
+/** Pseudo-legal moves for the side to move in the current phase. */
+function pseudoMoves(state: GameState): GameMove[] {
+  if (state.phase === 'placement') return placementMoves(state);
+  if (state.phase !== 'play') return [];
   return [...boardMoves(state, state.turn), ...dropMoves(state, state.turn)];
 }
 
-function executePlay(state: GameState, move: BoardMove | DropMove): GameState {
-  return move.type === 'drop' ? executeDrop(state, move) : executeBoardMove(state, move);
+/**
+ * §10.1 whether the move keeps the mover's marshal out of reach.
+ * `inCheck` is the mover's check status before the move. Fast path: putting a
+ * piece from hand on top of a stack can only block lines and cover enemy
+ * pieces, so it never exposes the marshal when it is not already attacked.
+ */
+function keepsMarshalSafe(state: GameState, move: GameMove, inCheck: boolean): boolean {
+  if ((move.type === 'place' || move.type === 'drop') && !inCheck) return true;
+  if (move.type === 'finishPlacement') return !inCheck;
+  if (capturesMarshal(state, move)) return true;
+  return !isInCheck(execute(state, move).board, move.player);
 }
 
-/**
- * §10.1 whether the move keeps the mover's marshal out of capture.
- * `inCheck` is the mover's check status before the move (drop fast path:
- * a drop can never expose the marshal, it can only fail to block).
- */
-function keepsMarshalSafe(state: GameState, move: BoardMove | DropMove, inCheck: boolean): boolean {
-  if (move.type === 'drop' && !inCheck) return true;
-  if (move.type !== 'drop' && capturesMarshal(state, move)) return true;
-  return !isInCheck(executePlay(state, move).board, move.player);
+function legalGameMoves(state: GameState): GameMove[] {
+  const inCheck = isInCheck(state.board, state.turn);
+  return pseudoMoves(state).filter((m) => keepsMarshalSafe(state, m, inCheck));
 }
 
 function hasLegalMove(state: GameState): boolean {
@@ -85,24 +118,27 @@ function hasLegalMove(state: GameState): boolean {
 
 /** §11.2 / §11.3 ends the game if the side to move has no legal move. */
 function concludeIfStuck(state: GameState): GameState {
-  if (state.phase !== 'play' || hasLegalMove(state)) return state;
+  if (state.phase === 'finished' || hasLegalMove(state)) return state;
   return finish(state, {
     winner: opponent(state.turn),
     reason: isInCheck(state.board, state.turn) ? 'checkmate' : 'stalemate',
   });
 }
 
-function applyPlayMove(state: GameState, move: BoardMove | DropMove): MoveResult {
-  const error = move.type === 'drop' ? validateDrop(state, move) : validateBoardMove(state, move);
+function applyGameMove(state: GameState, move: GameMove): MoveResult {
+  const error = validatePseudo(state, move);
   if (error) return { ok: false, error };
   if (!keepsMarshalSafe(state, move, isInCheck(state.board, move.player))) {
     return { ok: false, error: MoveError.SELF_CHECK };
   }
 
-  const tookMarshal = move.type !== 'drop' && capturesMarshal(state, move);
-  const next = executePlay(state, move);
+  const tookMarshal = capturesMarshal(state, move);
+  const next = execute(state, move);
   if (tookMarshal) {
     return { ok: true, state: finish(next, { winner: move.player, reason: 'marshalCaptured' }) };
+  }
+  if (next.phase !== 'play' || state.phase !== 'play') {
+    return { ok: true, state: concludeIfStuck(next) };
   }
 
   const key = positionKey(next);
@@ -138,16 +174,8 @@ export function applyMove(state: GameState, move: Move): MoveResult {
       };
     case 'agreeDraw':
       return { ok: true, state: finish(state, { winner: null, reason: 'agreement' }) };
-    case 'place':
-    case 'finishPlacement': {
-      const result = applyPlacementMove(state, move);
-      return result.ok ? { ok: true, state: concludeIfStuck(result.state) } : result;
-    }
-    case 'move':
-    case 'capture':
-    case 'stack':
-    case 'drop':
-      return applyPlayMove(state, move);
+    default:
+      return applyGameMove(state, move);
   }
 }
 
@@ -163,17 +191,14 @@ export function validateMove(state: GameState, move: Move): MoveError | null {
  * listed.
  */
 export function legalMoves(state: GameState): Move[] {
-  if (state.phase === 'placement') return placementMoves(state);
-  if (state.phase !== 'play') return [];
-  const inCheck = isInCheck(state.board, state.turn);
-  return pseudoMoves(state).filter((m) => keepsMarshalSafe(state, m, inCheck));
+  return legalGameMoves(state);
 }
 
 export function isGameOver(state: GameState): boolean {
   return state.phase === 'finished';
 }
 
-/** Whether the side to move currently has its marshal under attack. */
+/** §10.1 / §9.5 whether the side to move currently has its marshal under attack. */
 export function inCheck(state: GameState): boolean {
-  return state.phase === 'play' && isInCheck(state.board, state.turn);
+  return state.phase !== 'finished' && isInCheck(state.board, state.turn);
 }

@@ -29,7 +29,7 @@ describe('§12 public API', () => {
   });
 
   it('exposes every §12.3 error code', () => {
-    expect(Object.keys(engine.MoveError)).toHaveLength(20);
+    expect(Object.keys(engine.MoveError)).toHaveLength(22);
   });
 
   it('plays a short game through the public API only', () => {
@@ -38,6 +38,8 @@ describe('§12 public API', () => {
       { type: 'place', player: 'white', kind: 'marshal', to: { file: 4, rank: 8 } },
       { type: 'place', player: 'black', kind: 'pawn', to: { file: 4, rank: 2 } },
       { type: 'finishPlacement', player: 'white' },
+      { type: 'finishPlacement', player: 'black' },
+      { type: 'move', player: 'white', from: { file: 4, rank: 8 }, to: { file: 4, rank: 7 } },
       { type: 'move', player: 'black', from: { file: 4, rank: 2 }, to: { file: 4, rank: 3 } },
       { type: 'resign', player: 'white' },
     ];

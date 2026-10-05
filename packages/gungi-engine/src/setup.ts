@@ -1,5 +1,8 @@
 /**
- * Initial free-placement phase (§9).
+ * Initial placement (draft) phase (§9).
+ *
+ * Functions here check pseudo-legality only. Marshal safety (§10.1, §9.5) is
+ * layered on top in engine.ts.
  */
 
 import {
@@ -7,24 +10,17 @@ import {
   createEmptyBoard,
   findMarshal,
   getStack,
-  hasRoom,
   isInTerritory,
   isValidSquare,
   setStack,
-  topPiece,
 } from './board';
-import { ROSTER, handTotal, isPieceKind, opponent, withHandDelta } from './pieces';
+import { ROSTER, isPieceKind, opponent, withHandDelta } from './pieces';
+import { placingError } from './placing';
 import { positionKey } from './position';
-import type {
-  FinishPlacementMove,
-  GameState,
-  Move,
-  MoveResult,
-  PieceKind,
-  PlaceMove,
-  PlayerSide,
-} from './types';
+import type { FinishPlacementMove, GameState, PieceKind, PlaceMove, PlayerSide } from './types';
 import { MoveError, PIECE_KINDS } from './types';
+
+export type PlacementMove = PlaceMove | FinishPlacementMove;
 
 /** §9.1 empty board, full hands, black to place. */
 export function createInitialState(): GameState {
@@ -45,14 +41,9 @@ export function hasPlacedMarshal(state: GameState, side: PlayerSide): boolean {
   return findMarshal(state.board, side) !== undefined;
 }
 
-/** Starts the play phase (§9.4): black moves first, repetition counting begins. */
+/** §9.4 starts the play phase with white to move. */
 function startPlay(state: GameState): GameState {
-  const next: GameState = {
-    ...state,
-    phase: 'play',
-    turn: 'black',
-    placementDone: { black: true, white: true },
-  };
+  const next: GameState = { ...state, phase: 'play', turn: 'white' };
   return { ...next, positionCounts: { [positionKey(next)]: 1 } };
 }
 
@@ -74,64 +65,52 @@ export function validatePlace(state: GameState, move: PlaceMove): MoveError | nu
     return MoveError.MARSHAL_FIRST;
   }
   if (!isInTerritory(move.player, move.to.rank)) return MoveError.OUTSIDE_TERRITORY;
-  const stack = getStack(state.board, move.to);
-  const top = topPiece(stack);
-  if (top) {
-    if (top.owner !== move.player) return MoveError.OCCUPIED_BY_ENEMY;
-    if (top.kind === 'marshal') return MoveError.CANNOT_STACK_ON_MARSHAL;
-    if (!hasRoom(stack)) return MoveError.STACK_FULL;
-  }
+  return placingError(state.board, move.player, move.kind, move.to);
+}
+
+export function validateFinishPlacement(
+  state: GameState,
+  move: FinishPlacementMove,
+): MoveError | null {
+  if (state.phase !== 'placement') return MoveError.WRONG_PHASE;
+  if (move.player !== state.turn) return MoveError.NOT_YOUR_TURN;
+  if (!hasPlacedMarshal(state, move.player)) return MoveError.MARSHAL_FIRST;
   return null;
 }
 
-function applyPlace(state: GameState, move: PlaceMove): MoveResult {
-  const error = validatePlace(state, move);
-  if (error) return { ok: false, error };
+export function validatePlacementMove(state: GameState, move: PlacementMove): MoveError | null {
+  return move.type === 'place' ? validatePlace(state, move) : validateFinishPlacement(state, move);
+}
+
+/** Applies a validated placement-phase move. */
+export function executePlacementMove(state: GameState, move: PlacementMove): GameState {
+  if (move.type === 'finishPlacement') {
+    // §9.3 only the declaring side stops placing; the other side continues alone.
+    const placementDone = { ...state.placementDone, [move.player]: true };
+    return advancePlacement({ ...state, placementDone, ply: state.ply + 1 }, move.player);
+  }
   const stack = getStack(state.board, move.to);
-  const hand = withHandDelta(state.hands[move.player], move.kind, -1);
   const placed: GameState = {
     ...state,
     board: setStack(state.board, move.to, [...stack, { kind: move.kind, owner: move.player }]),
-    hands: { ...state.hands, [move.player]: hand },
-    placementDone: {
-      ...state.placementDone,
-      [move.player]: handTotal(hand) === 0 || state.placementDone[move.player],
+    hands: {
+      ...state.hands,
+      [move.player]: withHandDelta(state.hands[move.player], move.kind, -1),
     },
     ply: state.ply + 1,
   };
-  return { ok: true, state: advancePlacement(placed, move.player) };
+  return advancePlacement(placed, move.player);
 }
 
-function applyFinishPlacement(state: GameState, move: FinishPlacementMove): MoveResult {
-  if (state.phase !== 'placement') return { ok: false, error: MoveError.WRONG_PHASE };
-  if (move.player !== state.turn) return { ok: false, error: MoveError.NOT_YOUR_TURN };
-  if (!hasPlacedMarshal(state, move.player)) return { ok: false, error: MoveError.MARSHAL_FIRST };
-  // §9.3 the second player's declaration ends the phase for both sides.
-  const placementDone =
-    move.player === 'white'
-      ? { black: true, white: true }
-      : { ...state.placementDone, black: true };
-  const next: GameState = { ...state, placementDone, ply: state.ply + 1 };
-  return { ok: true, state: advancePlacement(next, move.player) };
-}
-
-/** Applies a placement-phase move (`place` / `finishPlacement`). */
-export function applyPlacementMove(
-  state: GameState,
-  move: PlaceMove | FinishPlacementMove,
-): MoveResult {
-  return move.type === 'place' ? applyPlace(state, move) : applyFinishPlacement(state, move);
-}
-
-/** All legal placement-phase moves for the side to move. */
-export function placementMoves(state: GameState): Move[] {
+/** All pseudo-legal placement-phase moves for the side to move. */
+export function placementMoves(state: GameState): PlacementMove[] {
   if (state.phase !== 'placement') return [];
   const player = state.turn;
   const marshalPlaced = hasPlacedMarshal(state, player);
   const kinds: PieceKind[] = marshalPlaced
     ? PIECE_KINDS.filter((k) => state.hands[player][k] > 0)
     : ['marshal'];
-  const moves: Move[] = [];
+  const moves: PlacementMove[] = [];
   for (const to of allSquares()) {
     if (!isInTerritory(player, to.rank)) continue;
     for (const kind of kinds) {

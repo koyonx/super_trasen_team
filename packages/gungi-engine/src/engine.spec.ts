@@ -5,7 +5,7 @@ import { handTotal, opponent } from './pieces';
 import { createPosition } from './position';
 import { createInitialState } from './setup';
 import { B, W, at, sq } from './test-helpers';
-import type { BoardMove, GameState, Move, PlayerSide } from './types';
+import type { BoardMove, GameState, Move, PieceKind, PlayerSide } from './types';
 import { MoveError } from './types';
 
 const mv = (
@@ -240,17 +240,92 @@ describe('§12.2 malformed input', () => {
 });
 
 describe('§9 → §11 lifecycle', () => {
-  it('placement transitions to play with black to move', () => {
+  it('placement transitions to play with white to move', () => {
     const s = play(
       createInitialState(),
       { type: 'place', player: 'black', kind: 'marshal', to: sq(4, 0) },
       { type: 'place', player: 'white', kind: 'marshal', to: sq(4, 8) },
       { type: 'place', player: 'black', kind: 'pawn', to: sq(4, 2) },
       { type: 'finishPlacement', player: 'white' },
+      { type: 'finishPlacement', player: 'black' },
     );
     expect(s.phase).toBe('play');
-    expect(s.turn).toBe('black');
+    expect(s.turn).toBe('white');
     expect(legalMoves(s).length).toBeGreaterThan(0);
+    expect(legalMoves(s).every((m) => 'player' in m && m.player === 'white')).toBe(true);
+  });
+});
+
+const place = (player: PlayerSide, kind: PieceKind, file: number, rank: number): Move => ({
+  type: 'place',
+  player,
+  kind,
+  to: sq(file, rank),
+});
+
+/** Marshals placed, white builds a tier-3 cannon on file 4 (rank 6) aiming at black. */
+function cannonTowerAgainst(blackMarshalRank: number, blackFiller: Move[]): GameState {
+  return play(
+    createInitialState(),
+    place('black', 'marshal', 4, blackMarshalRank),
+    place('white', 'marshal', 0, 8),
+    blackFiller[0]!,
+    place('white', 'general', 4, 6),
+    blackFiller[1]!,
+    place('white', 'general', 4, 6),
+    blackFiller[2]!,
+    place('white', 'cannon', 4, 6),
+  );
+}
+
+describe('§9.5 check during placement', () => {
+  const filler = [
+    place('black', 'general', 0, 0),
+    place('black', 'general', 1, 0),
+    place('black', 'general', 2, 0),
+  ];
+
+  it('a placement may give check; the checked side must block and cannot finish', () => {
+    const s = cannonTowerAgainst(0, filler);
+    expect(s.phase).toBe('placement');
+    expect(s.turn).toBe('black');
+    expect(inCheck(s)).toBe(true);
+    expect(validateMove(s, { type: 'finishPlacement', player: 'black' })).toBe(
+      MoveError.SELF_CHECK,
+    );
+    expect(validateMove(s, place('black', 'general', 8, 0))).toBe(MoveError.SELF_CHECK);
+    const moves = legalMoves(s);
+    expect(moves.length).toBeGreaterThan(0);
+    for (const m of moves) {
+      expect(m.type).toBe('place');
+      if (m.type === 'place') expect([sq(4, 1), sq(4, 2)]).toContainEqual(m.to);
+    }
+    const blocked = play(s, place('black', 'general', 4, 1));
+    expect(inCheck({ ...blocked, turn: 'black' })).toBe(false);
+  });
+
+  it('a check that cannot be blocked inside the territory is checkmate', () => {
+    const s = cannonTowerAgainst(2, filler);
+    expect(s.result).toEqual({ winner: 'white', reason: 'checkmate' });
+    expect(s.phase).toBe('finished');
+  });
+
+  it('§11.1 a check carried into play lets white capture the marshal', () => {
+    const s = play(
+      createInitialState(),
+      place('black', 'marshal', 4, 0),
+      place('white', 'marshal', 0, 8),
+      { type: 'finishPlacement', player: 'black' },
+      place('white', 'general', 4, 6),
+      place('white', 'general', 4, 6),
+      place('white', 'cannon', 4, 6),
+      { type: 'finishPlacement', player: 'white' },
+    );
+    expect(s.phase).toBe('play');
+    expect(s.turn).toBe('white');
+    const next = play(s, mv('capture', [4, 6], [4, 0], 'white'));
+    expect(next.result).toEqual({ winner: 'white', reason: 'marshalCaptured' });
+    expect(next.captured.white).toEqual(['marshal']);
   });
 });
 
