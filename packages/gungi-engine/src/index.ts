@@ -1,15 +1,47 @@
 /**
  * Gungi rule engine (server-authoritative).
  *
- * All board state, legal-move generation and win/loss judgment are implemented
- * here as pure functions, and consumed by:
- *  - server: authoritative move validation
- *  - client: pre-validation and UI hints
+ * Implements docs/GUNGI_RULES.md as pure functions over immutable, plain JSON
+ * state. Consumed by:
+ *  - server: authoritative move validation (`applyMove`)
+ *  - client: pre-validation and UI hints (`legalMoves`, `validateMove`)
  *  - AI: search over legal moves
- *
- * Implementation lands in Phase 1 (see docs/TASKS.md).
  */
 
 import { BOARD_SIZE, MAX_STACK_HEIGHT } from '@gungi/shared';
 
 export { BOARD_SIZE, MAX_STACK_HEIGHT };
+
+export type {
+  AgreeDrawMove,
+  Board,
+  BoardMove,
+  DropMove,
+  FinishPlacementMove,
+  GameEndReason,
+  GamePhase,
+  GameResult,
+  GameState,
+  Hand,
+  Move,
+  MoveResult,
+  Piece,
+  PieceKind,
+  PlaceMove,
+  PlayerSide,
+  ResignMove,
+  Square,
+  Stack,
+  TimeoutMove,
+} from './types';
+export { MoveError, PIECE_KINDS } from './types';
+
+export { PIECE_GLYPHS, ROSTER, opponent } from './pieces';
+export { getStack, topPiece, isInTerritory } from './board';
+export { MOVE_RULES, reachableSquares } from './movement';
+export type { Direction, MoveRule } from './movement';
+export { frontLineRank, isInDropZone } from './drops';
+export { createInitialState } from './setup';
+export { createPosition, positionKey } from './position';
+export type { PositionSetup } from './position';
+export { applyMove, inCheck, isGameOver, legalMoves, validateMove } from './engine';
