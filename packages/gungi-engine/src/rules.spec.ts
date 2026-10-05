@@ -261,3 +261,40 @@ describe('§10.1 check detection', () => {
     expect(isInCheck(board, 'black')).toBe(false);
   });
 });
+
+describe('§7 betrayal on a board stack move', () => {
+  const setup = (hand: Partial<Record<'samurai' | 'pawn', number>>) =>
+    createPosition({
+      stacks: [...KINGS, at(4, 4, B('tactician')), at(3, 5, W('samurai'))],
+      hands: { black: hand },
+    });
+
+  it('a tactician stacking onto an enemy may convert it', () => {
+    const s = setup({ samurai: 1 });
+    const next = play(s, { ...mv('stack', sq(4, 4), sq(3, 5)), betray: [0] });
+    expect(getStack(next.board, sq(3, 5))).toEqual([B('samurai'), B('tactician')]);
+    expect(next.hands.black.samurai).toBe(0);
+    expect(next.captured.black).toEqual(['samurai']);
+  });
+
+  it('betrayal is not allowed with capture or plain move', () => {
+    const s = setup({ samurai: 1 });
+    expect(validateBoardMove(s, { ...mv('capture', sq(4, 4), sq(3, 5)), betray: [0] })).toBe(
+      MoveError.INVALID_BETRAYAL,
+    );
+  });
+
+  it('boardMoves offers stack with and without betrayal', () => {
+    const moves = boardMoves(setup({ samurai: 1 }), 'black').filter(
+      (m) => m.type === 'stack' && m.to.file === 3 && m.to.rank === 5,
+    );
+    expect(moves.map((m) => m.betray ?? [])).toEqual([[], [0]]);
+  });
+
+  it('without the matching hand piece only the plain stack is offered', () => {
+    const moves = boardMoves(setup({ pawn: 1 }), 'black').filter(
+      (m) => m.type === 'stack' && m.to.file === 3 && m.to.rank === 5,
+    );
+    expect(moves).toEqual([mv('stack', sq(4, 4), sq(3, 5))]);
+  });
+});

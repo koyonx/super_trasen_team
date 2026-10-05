@@ -15,6 +15,7 @@ import {
   setStack,
   topPiece,
 } from './board';
+import { applyBetrayal, betrayalOptions, isValidBetrayal } from './betrayal';
 import { reachableSquares } from './movement';
 import { opponent } from './pieces';
 import type { Board, BoardMove, GameState, PlayerSide, Square, Stack } from './types';
@@ -57,7 +58,12 @@ export function validateBoardMove(state: GameState, move: BoardMove): MoveError 
     }
   }
 
-  if (move.betray !== undefined && move.betray.length > 0) return MoveError.INVALID_BETRAYAL;
+  // §7.1 betrayal only accompanies a stack move.
+  const betrayalOk =
+    move.type === 'stack'
+      ? isValidBetrayal(target, move.player, piece.kind, state.hands[move.player], move.betray)
+      : move.betray === undefined || (Array.isArray(move.betray) && move.betray.length === 0);
+  if (!betrayalOk) return MoveError.INVALID_BETRAYAL;
   return null;
 }
 
@@ -70,6 +76,7 @@ export function executeBoardMove(state: GameState, move: BoardMove): GameState {
 
   let landed: Stack;
   let captured = state.captured;
+  let hands = state.hands;
   if (move.type === 'capture') {
     // §6.4 every enemy piece in the stack is removed; own pieces stay below.
     const enemies = target.filter((p) => p.owner !== move.player);
@@ -78,14 +85,20 @@ export function executeBoardMove(state: GameState, move: BoardMove): GameState {
       ...captured,
       [move.player]: [...captured[move.player], ...enemies.map((p) => p.kind)],
     };
+  } else if (move.type === 'stack') {
+    const betrayal = applyBetrayal(target, move.player, state.hands[move.player], move.betray);
+    landed = [...betrayal.stack, piece];
+    hands = { ...hands, [move.player]: betrayal.hand };
+    captured = { ...captured, [move.player]: [...captured[move.player], ...betrayal.removed] };
   } else {
-    landed = [...target, piece];
+    landed = [piece];
   }
 
   const board = setStack(setStack(state.board, move.from, origin.slice(0, -1)), move.to, landed);
   return {
     ...state,
     board,
+    hands,
     captured,
     turn: opponent(move.player),
     ply: state.ply + 1,
@@ -109,8 +122,17 @@ export function boardMoves(state: GameState, side: PlayerSide): BoardMove[] {
       }
       if (target.length > tier) continue;
       if (top.owner !== side) moves.push({ type: 'capture', player: side, from, to });
-      if (top.kind !== 'marshal' && target.length < MAX_STACK_HEIGHT) {
+      if (top.kind === 'marshal' || target.length >= MAX_STACK_HEIGHT) continue;
+      if (piece.kind !== 'tactician') {
         moves.push({ type: 'stack', player: side, from, to });
+        continue;
+      }
+      for (const betray of betrayalOptions(target, side, state.hands[side])) {
+        moves.push(
+          betray.length > 0
+            ? { type: 'stack', player: side, from, to, betray }
+            : { type: 'stack', player: side, from, to },
+        );
       }
     }
   }
