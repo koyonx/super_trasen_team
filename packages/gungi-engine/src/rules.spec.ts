@@ -194,38 +194,100 @@ describe('§6.4 capture', () => {
     expect(next.turn).toBe('white');
   });
 
-  it('removes only the top of a stack and the capturer stays put', () => {
+  it('removes only the top and the capturer lands on the remaining stack', () => {
+    // The worked example of §6.4: [白兵, 黒侍, 白大] taken by a black cannon.
     const s = createPosition({
       stacks: [
         ...KINGS,
-        at(4, 4, B('pawn'), B('pawn'), B('cannon')),
-        at(4, 5, W('pawn'), B('fortress'), W('general')),
+        at(4, 4, B('pawn'), B('general'), B('cannon')),
+        at(4, 5, W('pawn'), B('samurai'), W('general')),
       ],
     });
     const next = play(s, mv('capture', sq(4, 4), sq(4, 5)));
-    expect(getStack(next.board, sq(4, 5))).toEqual([W('pawn'), B('fortress')]);
-    expect(getStack(next.board, sq(4, 4))).toEqual([B('pawn'), B('pawn'), B('cannon')]);
+    expect(getStack(next.board, sq(4, 5))).toEqual([W('pawn'), B('samurai'), B('cannon')]);
+    expect(getStack(next.board, sq(4, 4))).toEqual([B('pawn'), B('general')]);
     expect(next.captured.black).toEqual(['general']);
     expect(next.turn).toBe('white');
     expect(next.ply).toBe(1);
   });
 
-  it('a capture may uncover an enemy piece as the new top', () => {
+  it('the capturer lands on an uncovered enemy piece', () => {
     const s = createPosition({
       stacks: [...KINGS, at(4, 4, B('pawn')), at(4, 5, W('samurai'), W('general'))],
     });
     const next = play(s, mv('capture', sq(4, 4), sq(4, 5)));
-    expect(getStack(next.board, sq(4, 5))).toEqual([W('samurai')]);
-    expect(getStack(next.board, sq(4, 4))).toEqual([B('pawn')]);
+    expect(getStack(next.board, sq(4, 5))).toEqual([W('samurai'), B('pawn')]);
+    expect(getStack(next.board, sq(4, 4))).toEqual([]);
   });
 
-  it('a capturer leaving a stack lands at tier 1', () => {
+  it('the capturer lands on an uncovered own piece', () => {
+    const s = createPosition({
+      stacks: [...KINGS, at(4, 4, B('pawn')), at(4, 5, B('samurai'), W('general'))],
+    });
+    const next = play(s, mv('capture', sq(4, 4), sq(4, 5)));
+    expect(getStack(next.board, sq(4, 5))).toEqual([B('samurai'), B('pawn')]);
+  });
+
+  it('§4.1 capturing the top of a 3-high stack keeps it at 3', () => {
+    const s = createPosition({
+      stacks: [...KINGS, at(4, 4, B('pawn')), at(4, 5, W('pawn'), W('samurai'), W('general'))],
+    });
+    const next = play(s, mv('capture', sq(4, 4), sq(4, 5)));
+    expect(getStack(next.board, sq(4, 5))).toEqual([W('pawn'), W('samurai'), B('pawn')]);
+  });
+
+  it('a capturer leaving a stack uncovers the piece below it', () => {
     const s = createPosition({
       stacks: [...KINGS, at(4, 4, B('pawn'), B('pawn')), at(5, 5, W('samurai'))],
     });
     const next = play(s, mv('capture', sq(4, 4), sq(5, 5)));
     expect(getStack(next.board, sq(5, 5))).toEqual([B('pawn')]);
     expect(getStack(next.board, sq(4, 4))).toEqual([B('pawn')]);
+  });
+
+  it('§4.5 a capturing fortress rises to tier 2 and keeps its movement', () => {
+    const s = createPosition({
+      stacks: [...KINGS, at(4, 4, B('fortress')), at(4, 5, W('pawn'), W('samurai'))],
+    });
+    const next = play(s, mv('capture', sq(4, 4), sq(4, 5)));
+    expect(getStack(next.board, sq(4, 5))).toEqual([W('pawn'), B('fortress')]);
+    // §5.3.8 eight directions, one step, whatever the tier.
+    const back = { ...next, turn: 'black' as const };
+    const fromFortress = boardMoves(back, 'black').filter((m) => m.from.rank === 5);
+    expect(fromFortress.filter((m) => m.type === 'move')).toHaveLength(8);
+  });
+
+  it('§4.5 a fortress reached by capture may be stacked on, and may climb to tier 3', () => {
+    // A tier-2 black fortress is reachable as shown above; white then stacks on it.
+    const s = createPosition({
+      stacks: [
+        ...KINGS,
+        at(4, 4, W('pawn'), B('fortress'), W('general')),
+        at(4, 3, B('fortress')),
+        at(3, 3, B('pawn'), B('pawn'), W('samurai')),
+      ],
+      turn: 'white',
+    });
+    expect(validateBoardMove(s, mv('stack', sq(3, 3), sq(4, 4), 'white'))).toBe(
+      MoveError.STACK_FULL,
+    );
+    const black = { ...s, turn: 'black' as const };
+    // The second fortress still cannot stack, but its capture lands on tier 3.
+    expect(validateBoardMove(black, mv('stack', sq(4, 3), sq(4, 4)))).toBe(
+      MoveError.FORTRESS_CANNOT_STACK,
+    );
+    const next = play(black, mv('capture', sq(4, 3), sq(4, 4)));
+    expect(getStack(next.board, sq(4, 4))).toEqual([W('pawn'), B('fortress'), B('fortress')]);
+    expect(getStack(next.board, sq(4, 3))).toEqual([]);
+  });
+
+  it('§4.4 capturing a marshal on top of a stack lands on what is below it', () => {
+    const s = createPosition({
+      stacks: [at(0, 0, B('marshal')), at(4, 4, B('pawn')), at(4, 5, W('pawn'), W('marshal'))],
+    });
+    const next = play(s, mv('capture', sq(4, 4), sq(4, 5)));
+    expect(getStack(next.board, sq(4, 5))).toEqual([W('pawn'), B('pawn')]);
+    expect(next.captured.black).toEqual(['marshal']);
   });
 
   it('rejects capturing an own piece', () => {

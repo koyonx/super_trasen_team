@@ -10,6 +10,7 @@ import {
   allSquares,
   findMarshal,
   getStack,
+  hasRoom,
   isValidSquare,
   sameSquare,
   setStack,
@@ -72,24 +73,29 @@ export function executeBoardMove(state: GameState, move: BoardMove): GameState {
     quietPlies: move.type === 'capture' ? 0 : state.quietPlies + 1,
   });
 
+  const lift = (board: Board): Board => setStack(board, move.from, origin.slice(0, -1));
+
   if (move.type === 'capture') {
-    // §6.4 only the top piece is taken; the capturer moves in only if the
-    // square becomes empty, otherwise it stays where it was.
+    // §6.4 only the top piece is taken and the capturer always moves onto
+    // whatever remains (R-7). Legal-move filtering goes through this same
+    // function, so the simulated and the applied capture never differ.
     const victim = topPiece(target);
     if (!victim) throw new Error('executeBoardMove: nothing to capture');
     const remaining = target.slice(0, -1);
-    const board =
-      remaining.length > 0
-        ? setStack(state.board, move.to, remaining)
-        : setStack(setStack(state.board, move.from, origin.slice(0, -1)), move.to, [piece]);
+    // Unreachable from a valid position: a marshal is always a top piece, so
+    // it never sits right under the victim (§4.4), and taking one piece off
+    // a stack of at most 3 leaves room for the capturer (§4.1).
+    if (topPiece(remaining)?.kind === 'marshal' || !hasRoom(remaining)) {
+      throw new Error('executeBoardMove: corrupt target stack');
+    }
     return {
-      ...advance(board),
+      ...advance(setStack(lift(state.board), move.to, [...remaining, piece])),
       captured: { ...state.captured, [move.player]: [...state.captured[move.player], victim.kind] },
     };
   }
 
   const landed: Stack = move.type === 'stack' ? [...target, piece] : [piece];
-  return advance(setStack(setStack(state.board, move.from, origin.slice(0, -1)), move.to, landed));
+  return advance(setStack(lift(state.board), move.to, landed));
 }
 
 /** All pseudo-legal board moves for `side`. */

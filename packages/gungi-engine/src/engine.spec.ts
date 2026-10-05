@@ -92,6 +92,61 @@ describe('§10.1 self-check is rejected', () => {
   });
 });
 
+/**
+ * R-7: legality is judged on the board the capture really produces, where the
+ * capturer always lands on the remaining stack (§6.4). gungi.js 1.0.20 judges
+ * these on a board where the capturer stays put; each case below flips.
+ */
+describe('§10.1 self-check under §6.4 capture-advance', () => {
+  it('a pinned piece may not capture onto a remaining stack off the line', () => {
+    const s = createPosition({
+      stacks: [
+        at(4, 0, B('marshal')),
+        at(4, 1, B('general')),
+        at(5, 2, W('pawn'), W('samurai')),
+        rook(4, 8, 'white'),
+        at(0, 8, W('marshal')),
+      ],
+    });
+    const capture = mv('capture', [4, 1], [5, 2]);
+    expect(validateMove(s, capture)).toBe(MoveError.SELF_CHECK);
+    expect(legalMoves(s)).not.toContainEqual(capture);
+    expect(validateMove(s, mv('move', [4, 1], [4, 2]))).toBeNull();
+  });
+
+  it('a marshal may not capture onto a remaining stack that is attacked', () => {
+    const s = createPosition({
+      stacks: [
+        at(4, 0, B('marshal')),
+        at(4, 1, B('pawn'), W('samurai')),
+        rook(8, 1, 'white'),
+        at(8, 8, W('marshal')),
+      ],
+    });
+    expect(inCheck(s)).toBe(false);
+    const capture = mv('capture', [4, 0], [4, 1]);
+    expect(validateMove(s, capture)).toBe(MoveError.SELF_CHECK);
+    expect(legalMoves(s)).not.toContainEqual(capture);
+  });
+
+  it('a marshal may escape check by capturing onto a remaining stack', () => {
+    const s = createPosition({
+      stacks: [
+        at(4, 0, B('marshal')),
+        at(4, 1, W('pawn'), W('samurai')),
+        rook(8, 0, 'white'),
+        at(8, 8, W('marshal')),
+      ],
+    });
+    expect(inCheck(s)).toBe(true);
+    const capture = mv('capture', [4, 0], [4, 1]);
+    expect(legalMoves(s)).toContainEqual(capture);
+    const next = play(s, capture);
+    expect(getStack(next.board, sq(4, 1))).toEqual([W('pawn'), B('marshal')]);
+    expect(next.phase).toBe('play');
+  });
+});
+
 describe('§11.1 marshal capture', () => {
   it('ends the game and records the capture', () => {
     const s = createPosition({
@@ -102,6 +157,15 @@ describe('§11.1 marshal capture', () => {
     expect(next.phase).toBe('finished');
     expect(next.result).toEqual({ winner: 'black', reason: 'marshalCaptured' });
     expect(next.captured.black).toContain('marshal');
+  });
+
+  it('a marshal on top of a stack is captured and the capturer lands below', () => {
+    const s = createPosition({
+      stacks: [at(0, 0, B('marshal')), at(4, 4, B('pawn')), at(4, 5, W('pawn'), W('marshal'))],
+    });
+    const next = play(s, mv('capture', [4, 4], [4, 5]));
+    expect(getStack(next.board, sq(4, 5))).toEqual([W('pawn'), B('pawn')]);
+    expect(next.result).toEqual({ winner: 'black', reason: 'marshalCaptured' });
   });
 });
 
@@ -463,9 +527,9 @@ function checkInvariants(state: GameState): void {
     const stack = getStack(state.board, s);
     // §4.1 no stack exceeds 3.
     expect(stack.length).toBeLessThanOrEqual(3);
-    // §4.4 nothing sits on a marshal; §4.5 a fortress never sits on a piece.
+    // §4.4 nothing sits on a marshal (§6.4 capture-advance included). A
+    // fortress may sit above tier 1 after capturing (§4.5), so no check there.
     stack.slice(0, -1).forEach((p) => expect(p.kind).not.toBe('marshal'));
-    stack.slice(1).forEach((p) => expect(p.kind).not.toBe('fortress'));
   }
   // §11.4 the game ends as soon as the counter passes the limit.
   expect(state.quietPlies).toBeLessThanOrEqual(QUIET_PLY_LIMIT + 1);
