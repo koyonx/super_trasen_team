@@ -8,7 +8,7 @@ function handKey(hand: Hand): string {
 }
 
 /**
- * §11.4 canonical key identifying a position: board, both hands and side to
+ * §12.1 canonical key identifying a position: board, both hands and side to
  * move. Black pieces are prefixed with `+`, white with `-`.
  */
 export function positionKey(state: Pick<GameState, 'board' | 'hands' | 'turn'>): string {
@@ -31,19 +31,18 @@ export interface PositionSetup {
   /** Hand contents; unspecified kinds default to 0. */
   readonly hands?: Partial<Record<PlayerSide, Partial<Hand>>>;
   readonly turn?: PlayerSide;
+  /** §11.4 quiet-ply counter to start from (default 0). */
+  readonly quietPlies?: number;
 }
 
-/**
- * Builds a play-phase state from an arbitrary position (tests, AI, kifu
- * import). The given position counts as the first occurrence for §11.4.
- */
+/** Builds a play-phase state from an arbitrary position (tests, AI, kifu import). */
 export function createPosition(setup: PositionSetup = {}): GameState {
   let board = createEmptyBoard();
   for (const { square, pieces } of setup.stacks ?? []) {
     board = setStack(board, square, [...pieces]);
   }
   const hand = (side: PlayerSide): Hand => ({ ...emptyHand(), ...setup.hands?.[side] });
-  const base: GameState = {
+  return {
     phase: 'play',
     board,
     hands: { black: hand('black'), white: hand('white') },
@@ -51,8 +50,7 @@ export function createPosition(setup: PositionSetup = {}): GameState {
     placementDone: { black: true, white: true },
     captured: { black: [], white: [] },
     ply: 0,
-    positionCounts: {},
+    quietPlies: setup.quietPlies ?? 0,
     result: null,
   };
-  return { ...base, positionCounts: { [positionKey(base)]: 1 } };
 }

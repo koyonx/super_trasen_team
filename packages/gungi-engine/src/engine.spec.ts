@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { allSquares, getStack } from './board';
-import { applyMove, inCheck, isGameOver, legalMoves, validateMove } from './engine';
+import {
+  QUIET_PLY_LIMIT,
+  applyMove,
+  inCheck,
+  isGameOver,
+  legalMoves,
+  validateMove,
+} from './engine';
 import { handTotal, opponent } from './pieces';
-import { createPosition } from './position';
+import { createPosition, positionKey } from './position';
 import { createInitialState } from './setup';
 import { B, W, at, sq } from './test-helpers';
 import type { BoardMove, GameState, Move, PieceKind, PlayerSide } from './types';
@@ -70,7 +77,7 @@ describe('§10.1 self-check is rejected', () => {
     for (const m of moves) expect(validateMove(s, m)).toBeNull();
   });
 
-  it('capturing the enemy marshal is allowed even if own marshal is exposed', () => {
+  it('capturing the enemy marshal is rejected if it leaves the own marshal attacked', () => {
     const s = createPosition({
       stacks: [
         at(4, 0, B('marshal')),
@@ -79,8 +86,8 @@ describe('§10.1 self-check is rejected', () => {
         at(0, 8, W('marshal')),
       ],
     });
-    const next = play(s, mv('capture', [0, 4], [0, 8]));
-    expect(next.result).toEqual({ winner: 'black', reason: 'marshalCaptured' });
+    expect(validateMove(s, mv('capture', [0, 4], [0, 8]))).toBe(MoveError.SELF_CHECK);
+    expect(legalMoves(s).some((m) => m.type === 'capture')).toBe(false);
   });
 });
 
@@ -165,38 +172,109 @@ describe('§11.2 checkmate', () => {
 });
 
 describe('§11.3 stalemate', () => {
-  it('a side with no legal move and not in check loses', () => {
-    const s = createPosition({
-      stacks: [
-        at(0, 0, B('marshal')),
-        rook(1, 5, 'white'),
-        rook(8, 1, 'white'),
-        at(5, 5, W('pawn')),
-        at(8, 8, W('marshal')),
-      ],
-      turn: 'white',
-    });
+  const STUCK = [
+    at(0, 0, B('marshal')),
+    rook(1, 5, 'white'),
+    rook(8, 1, 'white'),
+    at(5, 5, W('pawn')),
+    at(8, 8, W('marshal')),
+  ];
+
+  it('a side with no legal move and not in check draws', () => {
+    const s = createPosition({ stacks: STUCK, turn: 'white' });
     const next = play(s, mv('move', [5, 5], [5, 4], 'white'));
-    expect(next.result).toEqual({ winner: 'white', reason: 'stalemate' });
+    expect(inCheck(next)).toBe(false);
+    expect(next.result).toEqual({ winner: null, reason: 'stalemate' });
+  });
+
+  it('a hand piece that can be dropped avoids stalemate', () => {
+    const s = createPosition({ stacks: STUCK, hands: { black: { general: 1 } }, turn: 'white' });
+    expect(play(s, mv('move', [5, 5], [5, 4], 'white')).result).toBeNull();
   });
 });
 
-describe('§11.4 repetition', () => {
-  it('the 4th occurrence of a position is a draw', () => {
-    let s = createPosition({ stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))] });
-    const cycle: Move[] = [
-      mv('move', [0, 0], [0, 1]),
-      mv('move', [8, 8], [8, 7], 'white'),
-      mv('move', [0, 1], [0, 0]),
-      mv('move', [8, 7], [8, 8], 'white'),
-    ];
-    s = play(s, ...cycle, ...cycle);
+describe('§11.4 fifty-move rule', () => {
+  const KINGS_ONLY = [at(0, 0, B('marshal')), at(8, 8, W('marshal'))];
+  const shuffle: Move[] = [
+    mv('move', [0, 0], [0, 1]),
+    mv('move', [8, 8], [8, 7], 'white'),
+    mv('move', [0, 1], [0, 0]),
+    mv('move', [8, 7], [8, 8], 'white'),
+  ];
+
+  it('the 51st consecutive quiet ply draws', () => {
+    const s = createPosition({ stacks: KINGS_ONLY, quietPlies: QUIET_PLY_LIMIT - 1 });
+    const fiftieth = play(s, shuffle[0]!);
+    expect(fiftieth.quietPlies).toBe(QUIET_PLY_LIMIT);
+    expect(fiftieth.result).toBeNull();
+    const next = play(fiftieth, shuffle[1]!);
+    expect(next.result).toEqual({ winner: null, reason: 'fiftyMoveRule' });
+  });
+
+  it('counts from the start of play', () => {
+    let s = createPosition({ stacks: KINGS_ONLY });
+    for (let i = 0; i < 12; i++) s = play(s, ...shuffle);
+    expect(s.quietPlies).toBe(48);
+    s = play(s, shuffle[0]!, shuffle[1]!);
     expect(s.result).toBeNull();
-    s = play(s, ...cycle.slice(0, 3));
+    s = play(s, shuffle[2]!);
+    expect(s.result).toEqual({ winner: null, reason: 'fiftyMoveRule' });
+    expect(s.ply).toBe(51);
+  });
+
+  it('there is no repetition rule', () => {
+    let s = createPosition({ stacks: KINGS_ONLY });
+    for (let i = 0; i < 5; i++) s = play(s, ...shuffle);
     expect(s.result).toBeNull();
-    s = play(s, cycle[3]!);
-    expect(s.result).toEqual({ winner: null, reason: 'repetition' });
-    expect(s.ply).toBe(12);
+  });
+
+  it('a drop resets the counter', () => {
+    const s = createPosition({
+      stacks: KINGS_ONLY,
+      hands: { black: { general: 1 } },
+      quietPlies: QUIET_PLY_LIMIT,
+    });
+    const next = play(s, { type: 'drop', player: 'black', kind: 'general', to: sq(3, 3) });
+    expect(next.quietPlies).toBe(0);
+    expect(next.result).toBeNull();
+  });
+
+  it('a capture resets the counter', () => {
+    const s = createPosition({
+      stacks: [...KINGS_ONLY, at(4, 4, B('pawn')), at(4, 5, W('pawn'))],
+      quietPlies: QUIET_PLY_LIMIT,
+    });
+    expect(play(s, mv('capture', [4, 4], [4, 5])).quietPlies).toBe(0);
+  });
+
+  it('takes precedence over a simultaneous checkmate', () => {
+    const s = createPosition({ stacks: MATE_NET, turn: 'white', quietPlies: QUIET_PLY_LIMIT });
+    expect(play(s, MATING_MOVE).result).toEqual({ winner: null, reason: 'fiftyMoveRule' });
+  });
+});
+
+describe('§12.1 state data', () => {
+  it('positionKey identifies board, hands and turn', () => {
+    const a = createPosition({ stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))] });
+    const b = createPosition({
+      stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))],
+      quietPlies: 9,
+    });
+    expect(positionKey(a)).toBe(positionKey(b));
+    expect(positionKey({ ...a, turn: 'white' })).not.toBe(positionKey(a));
+    const withHand = createPosition({
+      stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))],
+      hands: { white: { pawn: 1 } },
+    });
+    expect(positionKey(withHand)).not.toBe(positionKey(a));
+  });
+
+  it('createPosition builds a play-phase state', () => {
+    const s = createPosition();
+    expect(s.phase).toBe('play');
+    expect(s.turn).toBe('black');
+    expect(s.quietPlies).toBe(0);
+    expect(JSON.parse(JSON.stringify(s))).toEqual(s);
   });
 });
 

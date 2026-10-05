@@ -16,7 +16,6 @@ import {
 } from './board';
 import { ROSTER, isPieceKind, opponent, withHandDelta } from './pieces';
 import { placingError } from './placing';
-import { positionKey } from './position';
 import type { FinishPlacementMove, GameState, PieceKind, PlaceMove, PlayerSide } from './types';
 import { MoveError, PIECE_KINDS } from './types';
 
@@ -32,7 +31,7 @@ export function createInitialState(): GameState {
     placementDone: { black: false, white: false },
     captured: { black: [], white: [] },
     ply: 0,
-    positionCounts: {},
+    quietPlies: 0,
     result: null,
   };
 }
@@ -43,8 +42,7 @@ export function hasPlacedMarshal(state: GameState, side: PlayerSide): boolean {
 
 /** §9.4 starts the play phase with white to move. */
 function startPlay(state: GameState): GameState {
-  const next: GameState = { ...state, phase: 'play', turn: 'white' };
-  return { ...next, positionCounts: { [positionKey(next)]: 1 } };
+  return { ...state, phase: 'play', turn: 'white' };
 }
 
 /** §9.4 hands the turn to whoever still places, or starts play. */
@@ -87,7 +85,10 @@ export function executePlacementMove(state: GameState, move: PlacementMove): Gam
   if (move.type === 'finishPlacement') {
     // §9.3 only the declaring side stops placing; the other side continues alone.
     const placementDone = { ...state.placementDone, [move.player]: true };
-    return advancePlacement({ ...state, placementDone, ply: state.ply + 1 }, move.player);
+    return advancePlacement(
+      { ...state, placementDone, ply: state.ply + 1, quietPlies: 0 },
+      move.player,
+    );
   }
   const stack = getStack(state.board, move.to);
   const placed: GameState = {
@@ -98,6 +99,7 @@ export function executePlacementMove(state: GameState, move: PlacementMove): Gam
       [move.player]: withHandDelta(state.hands[move.player], move.kind, -1),
     },
     ply: state.ply + 1,
+    quietPlies: 0,
   };
   return advancePlacement(placed, move.player);
 }

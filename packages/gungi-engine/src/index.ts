@@ -44,4 +44,11 @@ export { ARMY_LIMIT } from './placing';
 export { createInitialState } from './setup';
 export { createPosition, positionKey } from './position';
 export type { PositionSetup } from './position';
-export { applyMove, inCheck, isGameOver, legalMoves, validateMove } from './engine';
+export {
+  QUIET_PLY_LIMIT,
+  applyMove,
+  inCheck,
+  isGameOver,
+  legalMoves,
+  validateMove,
+} from './engine';

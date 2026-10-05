@@ -9,7 +9,6 @@
 import { getStack } from './board';
 import { dropMoves, executeDrop, validateDrop } from './drops';
 import { opponent } from './pieces';
-import { positionKey } from './position';
 import { boardMoves, executeBoardMove, isInCheck, validateBoardMove } from './rules';
 import type { PlacementMove } from './setup';
 import { executePlacementMove, placementMoves, validatePlacementMove } from './setup';
@@ -26,6 +25,9 @@ import { MoveError } from './types';
 
 /** Moves that change the board or the phase (everything but terminal actions). */
 type GameMove = PlacementMove | BoardMove | DropMove;
+
+/** §11.4 the game is drawn once more than this many quiet plies have been played. */
+export const QUIET_PLY_LIMIT = 50;
 
 const MOVE_TYPES: ReadonlySet<string> = new Set([
   'place',
@@ -102,7 +104,7 @@ function pseudoMoves(state: GameState): GameMove[] {
 function keepsMarshalSafe(state: GameState, move: GameMove, inCheck: boolean): boolean {
   if ((move.type === 'place' || move.type === 'drop') && !inCheck) return true;
   if (move.type === 'finishPlacement') return !inCheck;
-  if (capturesMarshal(state, move)) return true;
+  // §10.1 no exception for capturing the enemy marshal.
   return !isInCheck(execute(state, move).board, move.player);
 }
 
@@ -116,13 +118,20 @@ function hasLegalMove(state: GameState): boolean {
   return pseudoMoves(state).some((m) => keepsMarshalSafe(state, m, inCheck));
 }
 
-/** §11.2 / §11.3 ends the game if the side to move has no legal move. */
-function concludeIfStuck(state: GameState): GameState {
-  if (state.phase === 'finished' || hasLegalMove(state)) return state;
-  return finish(state, {
-    winner: opponent(state.turn),
-    reason: isInCheck(state.board, state.turn) ? 'checkmate' : 'stalemate',
-  });
+/**
+ * §11.2–§11.4 ends the game after a move: the fifty-move draw first (it takes
+ * precedence over a simultaneous mate), then checkmate (loss) or stalemate
+ * (draw) when the side to move has no legal move.
+ */
+function conclude(state: GameState): GameState {
+  if (state.phase === 'finished') return state;
+  if (state.quietPlies > QUIET_PLY_LIMIT) {
+    return finish(state, { winner: null, reason: 'fiftyMoveRule' });
+  }
+  if (hasLegalMove(state)) return state;
+  return isInCheck(state.board, state.turn)
+    ? finish(state, { winner: opponent(state.turn), reason: 'checkmate' })
+    : finish(state, { winner: null, reason: 'stalemate' });
 }
 
 function applyGameMove(state: GameState, move: GameMove): MoveResult {
@@ -137,23 +146,7 @@ function applyGameMove(state: GameState, move: GameMove): MoveResult {
   if (tookMarshal) {
     return { ok: true, state: finish(next, { winner: move.player, reason: 'marshalCaptured' }) };
   }
-  if (next.phase !== 'play' || state.phase !== 'play') {
-    return { ok: true, state: concludeIfStuck(next) };
-  }
-
-  const key = positionKey(next);
-  const occurrences = (next.positionCounts[key] ?? 0) + 1;
-  const counted: GameState = {
-    ...next,
-    positionCounts: { ...next.positionCounts, [key]: occurrences },
-  };
-  const concluded = concludeIfStuck(counted);
-  if (concluded.phase === 'finished') return { ok: true, state: concluded };
-  // §11.4 fourth occurrence of the same position is a draw.
-  if (occurrences >= 4) {
-    return { ok: true, state: finish(counted, { winner: null, reason: 'repetition' }) };
-  }
-  return { ok: true, state: counted };
+  return { ok: true, state: conclude(next) };
 }
 
 /** Applies any move. Returns the next state or a rule-violation code. */

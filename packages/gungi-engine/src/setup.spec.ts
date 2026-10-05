@@ -213,9 +213,10 @@ describe('§9.3 finishPlacement', () => {
     expect(s.placementDone).toEqual({ black: false, white: false });
   });
 
-  it('records the starting position', () => {
-    const s = run(withMarshals(), finish('black'), finish('white'));
-    expect(Object.values(s.positionCounts)).toEqual([1]);
+  it('§11.4 placements and declarations keep the quiet-ply counter at 0', () => {
+    const s = run(withMarshals(), place('black', 'pawn', 0, 0), finish('white'), finish('black'));
+    expect(s.quietPlies).toBe(0);
+    expect(run({ ...withMarshals(), quietPlies: 7 }, finish('black')).quietPlies).toBe(0);
   });
 });
 
