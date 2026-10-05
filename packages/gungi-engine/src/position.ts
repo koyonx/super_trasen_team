@@ -12,6 +12,10 @@ function handKey(hand: Hand): string {
 /**
  * §12.1 canonical key identifying a position: board, both hands and side to
  * move. Black pieces are prefixed with `+`, white with `-`.
+ *
+ * Intended for kifu storage, analysis and AI transposition tables. The rules
+ * themselves never use it: there is no repetition rule (§15), so two equal
+ * keys mean nothing to `applyMove`.
  */
 export function positionKey(state: Pick<GameState, 'board' | 'hands' | 'turn'>): string {
   const squares = allSquares().map((sq) =>

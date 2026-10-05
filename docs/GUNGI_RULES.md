@@ -369,7 +369,8 @@ gungi.js 内部で食い違っている。本エンジンは合法手判定に�
 - 主なフィールド: `phase`（`placement` / `play` / `finished`）, `board`（`board[rank][file]` = 下→上の駒配列）,
   `hands`, `turn`, `placementDone`, `captured`, `ply`, `quietPlies`（§11.4 のカウンタ）, `result`。
 - すべての関数は入力状態を変更しない（イミュータブル）。
-- `positionKey(state)` は盤面・両者の持ち駒・手番から局面を一意に表す文字列を返す（棋譜・AI 用）。
+- `positionKey(state)` は盤面・両者の持ち駒・手番から局面を一意に表す文字列を返す。
+  棋譜・解析・AI の置換表（transposition table）用であり、**ルール判定自体には使わない**（千日手はない。§15）。
 - `createPosition(setup)` は任意局面（テスト・AI・棋譜読み込み）から対局フェーズの状態を作る。
   到達し得ない局面を作らないよう、次の不変条件を検査し、違反時は `InvalidPositionError`（`reason` にコード）を投げる。
   投げずに検査したい場合は `positionError(setup)` が理由コードまたは `null` を返す。
