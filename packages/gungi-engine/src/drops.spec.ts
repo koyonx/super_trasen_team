@@ -11,14 +11,7 @@ const drop = (
   file: number,
   rank: number,
   player: PlayerSide = 'black',
-  betray?: number[],
-): DropMove => ({
-  type: 'drop',
-  player,
-  kind,
-  to: sq(file, rank),
-  ...(betray ? { betray } : {}),
-});
+): DropMove => ({ type: 'drop', player, kind, to: sq(file, rank) });
 
 function apply(state: GameState, move: DropMove): GameState {
   const error = validateDrop(state, move);
@@ -128,64 +121,5 @@ describe('§8.3 drop targets', () => {
 
   it('dropMoves is empty with an empty hand', () => {
     expect(dropMoves(base({}), 'black')).toEqual([]);
-  });
-});
-
-describe('§7 betrayal (謀)', () => {
-  const tacticianSetup = (hand: Partial<Record<PieceKind, number>>) =>
-    createPosition({
-      stacks: [
-        at(4, 0, B('marshal')),
-        at(4, 8, W('marshal')),
-        at(0, 4, B('pawn')),
-        at(2, 2, W('samurai')),
-        at(3, 2, W('general'), W('pawn')),
-      ],
-      hands: { black: { tactician: 1, ...hand } },
-    });
-
-  it('§8.4 a dropped tactician converts an enemy piece by paying a hand piece', () => {
-    const s = tacticianSetup({ samurai: 1 });
-    const next = apply(s, drop('tactician', 2, 2, 'black', [0]));
-    expect(getStack(next.board, sq(2, 2))).toEqual([B('samurai'), B('tactician')]);
-    expect(next.hands.black.samurai).toBe(0);
-    expect(next.hands.black.tactician).toBe(0);
-    expect(next.captured.black).toEqual(['samurai']);
-  });
-
-  it('betrayal is optional', () => {
-    const next = apply(tacticianSetup({ samurai: 1 }), drop('tactician', 2, 2));
-    expect(getStack(next.board, sq(2, 2))).toEqual([W('samurai'), B('tactician')]);
-    expect(next.hands.black.samurai).toBe(1);
-  });
-
-  it('requires a matching piece in hand', () => {
-    expect(validateDrop(tacticianSetup({}), drop('tactician', 2, 2, 'black', [0]))).toBe(
-      MoveError.INVALID_BETRAYAL,
-    );
-  });
-
-  it('may convert a subset of a multi-piece stack', () => {
-    const s = tacticianSetup({ pawn: 1 });
-    const next = apply(s, drop('tactician', 3, 2, 'black', [1]));
-    expect(getStack(next.board, sq(3, 2))).toEqual([W('general'), B('pawn'), B('tactician')]);
-  });
-
-  it('rejects own pieces, duplicates and out-of-range indices', () => {
-    const s = tacticianSetup({ pawn: 2, general: 1 });
-    expect(validateDrop(s, drop('tactician', 3, 2, 'black', [1, 1]))).toBe(
-      MoveError.INVALID_BETRAYAL,
-    );
-    expect(validateDrop(s, drop('tactician', 3, 2, 'black', [5]))).toBe(MoveError.INVALID_BETRAYAL);
-    expect(validateDrop(s, drop('tactician', 3, 2, 'black', [0, 1]))).toBeNull();
-    expect(validateDrop(s, drop('pawn', 0, 4, 'black', [0]))).toBe(MoveError.INVALID_BETRAYAL);
-  });
-
-  it('dropMoves enumerates every affordable betrayal subset', () => {
-    const s = tacticianSetup({ pawn: 1, general: 1 });
-    const onStack = dropMoves(s, 'black').filter(
-      (m) => m.kind === 'tactician' && m.to.file === 3 && m.to.rank === 2,
-    );
-    expect(onStack.map((m) => m.betray ?? [])).toEqual([[], [0], [1], [0, 1]]);
   });
 });

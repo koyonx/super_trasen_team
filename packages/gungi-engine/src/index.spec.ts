@@ -29,7 +29,7 @@ describe('§12 public API', () => {
   });
 
   it('exposes every §12.3 error code', () => {
-    expect(Object.keys(engine.MoveError)).toHaveLength(21);
+    expect(Object.keys(engine.MoveError)).toHaveLength(20);
   });
 
   it('plays a short game through the public API only', () => {

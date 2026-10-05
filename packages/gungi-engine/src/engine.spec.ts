@@ -226,7 +226,8 @@ describe('§12.2 malformed input', () => {
     {},
     { type: 'teleport', player: 'black' },
     { type: 'resign', player: 'red' },
-    { type: 'move', player: 'black', from: sq(0, 0), to: sq(0, 1), betray: 'x' },
+    { type: 42, player: 'black' },
+    { type: 'agreeDraw ', player: 'black' },
   ])('rejects %j', (bad) => {
     expect(validateMove(s, bad as unknown as Move)).toBe(MoveError.INVALID_MOVE);
   });

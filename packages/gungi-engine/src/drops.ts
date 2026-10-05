@@ -4,7 +4,6 @@
 
 import { MAX_STACK_HEIGHT } from '@gungi/shared';
 import { allSquares, getStack, isValidSquare, setStack, topPiece } from './board';
-import { applyBetrayal, betrayalOptions, isValidBetrayal } from './betrayal';
 import { isPieceKind, opponent, withHandDelta } from './pieces';
 import type { Board, DropMove, GameState, PlayerSide } from './types';
 import { MoveError, PIECE_KINDS } from './types';
@@ -46,28 +45,18 @@ export function validateDrop(state: GameState, move: DropMove): MoveError | null
     if (top.kind === 'marshal') return MoveError.CANNOT_STACK_ON_MARSHAL;
     if (stack.length >= MAX_STACK_HEIGHT) return MoveError.STACK_FULL;
   }
-  const handAfter = withHandDelta(hand, move.kind, -1);
-  if (!isValidBetrayal(stack, move.player, move.kind, handAfter, move.betray)) {
-    return MoveError.INVALID_BETRAYAL;
-  }
   return null;
 }
 
 /** Applies a validated drop. */
 export function executeDrop(state: GameState, move: DropMove): GameState {
   const stack = getStack(state.board, move.to);
-  const handAfterDrop = withHandDelta(state.hands[move.player], move.kind, -1);
-  const betrayal = applyBetrayal(stack, move.player, handAfterDrop, move.betray);
   return {
     ...state,
-    board: setStack(state.board, move.to, [
-      ...betrayal.stack,
-      { kind: move.kind, owner: move.player },
-    ]),
-    hands: { ...state.hands, [move.player]: betrayal.hand },
-    captured: {
-      ...state.captured,
-      [move.player]: [...state.captured[move.player], ...betrayal.removed],
+    board: setStack(state.board, move.to, [...stack, { kind: move.kind, owner: move.player }]),
+    hands: {
+      ...state.hands,
+      [move.player]: withHandDelta(state.hands[move.player], move.kind, -1),
     },
     turn: opponent(move.player),
     ply: state.ply + 1,
@@ -87,18 +76,7 @@ export function dropMoves(state: GameState, side: PlayerSide): DropMove[] {
     if (top && (top.kind === 'marshal' || stack.length >= MAX_STACK_HEIGHT)) continue;
     for (const kind of kinds) {
       if (top && top.owner !== side && kind !== 'tactician') continue;
-      if (kind !== 'tactician') {
-        moves.push({ type: 'drop', player: side, kind, to });
-        continue;
-      }
-      const handAfter = withHandDelta(hand, kind, -1);
-      for (const betray of betrayalOptions(stack, side, handAfter)) {
-        moves.push(
-          betray.length > 0
-            ? { type: 'drop', player: side, kind, to, betray }
-            : { type: 'drop', player: side, kind, to },
-        );
-      }
+      moves.push({ type: 'drop', player: side, kind, to });
     }
   }
   return moves;

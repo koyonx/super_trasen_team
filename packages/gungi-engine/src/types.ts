@@ -93,8 +93,6 @@ export interface BoardMove {
   readonly player: PlayerSide;
   readonly from: Square;
   readonly to: Square;
-  /** §7.3 stack indices of enemy pieces to convert (tactician `stack` only). */
-  readonly betray?: readonly number[];
 }
 
 export interface DropMove {
@@ -102,8 +100,6 @@ export interface DropMove {
   readonly player: PlayerSide;
   readonly kind: PieceKind;
   readonly to: Square;
-  /** §7.3 stack indices of enemy pieces to convert (tactician only). */
-  readonly betray?: readonly number[];
 }
 
 export interface ResignMove {
@@ -137,14 +133,13 @@ export const MoveError = {
   OCCUPIED_BY_ENEMY: 'OCCUPIED_BY_ENEMY',
   STACK_FULL: 'STACK_FULL',
   CANNOT_STACK_ON_MARSHAL: 'CANNOT_STACK_ON_MARSHAL',
+  FORTRESS_CANNOT_STACK: 'FORTRESS_CANNOT_STACK',
   NO_PIECE: 'NO_PIECE',
   NOT_YOUR_PIECE: 'NOT_YOUR_PIECE',
   UNREACHABLE: 'UNREACHABLE',
-  TARGET_TOO_HIGH: 'TARGET_TOO_HIGH',
   TARGET_NOT_EMPTY: 'TARGET_NOT_EMPTY',
   TARGET_EMPTY: 'TARGET_EMPTY',
   CANNOT_CAPTURE_OWN: 'CANNOT_CAPTURE_OWN',
-  INVALID_BETRAYAL: 'INVALID_BETRAYAL',
   SELF_CHECK: 'SELF_CHECK',
   INVALID_MOVE: 'INVALID_MOVE',
 } as const;

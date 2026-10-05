@@ -15,10 +15,9 @@ import {
   setStack,
   topPiece,
 } from './board';
-import { applyBetrayal, betrayalOptions, isValidBetrayal } from './betrayal';
 import { reachableSquares } from './movement';
 import { opponent } from './pieces';
-import type { Board, BoardMove, GameState, PlayerSide, Square, Stack } from './types';
+import type { Board, BoardMove, GameState, Piece, PlayerSide, Square, Stack } from './types';
 import { MoveError } from './types';
 
 function canReach(board: Board, from: Square, to: Square): boolean {
@@ -28,43 +27,34 @@ function canReach(board: Board, from: Square, to: Square): boolean {
   return reachableSquares(board, from, piece, stack.length).some((sq) => sameSquare(sq, to));
 }
 
+/** §6.3 / §4.4 / §4.5 why `piece` may not be stacked onto `target`, if at all. */
+export function stackError(piece: Piece, target: Stack): MoveError | null {
+  if (piece.kind === 'fortress') return MoveError.FORTRESS_CANNOT_STACK;
+  if (topPiece(target)?.kind === 'marshal') return MoveError.CANNOT_STACK_ON_MARSHAL;
+  if (target.length >= MAX_STACK_HEIGHT) return MoveError.STACK_FULL;
+  return null;
+}
+
 export function validateBoardMove(state: GameState, move: BoardMove): MoveError | null {
   if (state.phase !== 'play') return MoveError.WRONG_PHASE;
   if (move.player !== state.turn) return MoveError.NOT_YOUR_TURN;
   if (!isValidSquare(move.from) || !isValidSquare(move.to)) return MoveError.INVALID_SQUARE;
 
-  const origin = getStack(state.board, move.from);
-  const piece = topPiece(origin);
+  const piece = topPiece(getStack(state.board, move.from));
   if (!piece) return MoveError.NO_PIECE;
   if (piece.owner !== move.player) return MoveError.NOT_YOUR_PIECE;
   if (sameSquare(move.from, move.to) || !canReach(state.board, move.from, move.to)) {
     return MoveError.UNREACHABLE;
   }
 
-  const tier = origin.length;
   const target = getStack(state.board, move.to);
   const top = topPiece(target);
-
-  if (move.type === 'move') {
-    if (top) return MoveError.TARGET_NOT_EMPTY;
-  } else {
-    if (!top) return MoveError.TARGET_EMPTY;
-    if (move.type === 'capture' && top.owner === move.player) return MoveError.CANNOT_CAPTURE_OWN;
-    // §6.2 only stacks no higher than the mover's tier can be taken or stacked on.
-    if (target.length > tier) return MoveError.TARGET_TOO_HIGH;
-    if (move.type === 'stack') {
-      if (top.kind === 'marshal') return MoveError.CANNOT_STACK_ON_MARSHAL;
-      if (target.length >= MAX_STACK_HEIGHT) return MoveError.STACK_FULL;
-    }
-  }
-
-  // §7.1 betrayal only accompanies a stack move.
-  const betrayalOk =
-    move.type === 'stack'
-      ? isValidBetrayal(target, move.player, piece.kind, state.hands[move.player], move.betray)
-      : move.betray === undefined || (Array.isArray(move.betray) && move.betray.length === 0);
-  if (!betrayalOk) return MoveError.INVALID_BETRAYAL;
-  return null;
+  if (move.type === 'move') return top ? MoveError.TARGET_NOT_EMPTY : null;
+  if (!top) return MoveError.TARGET_EMPTY;
+  // §6.2 there is no height condition for captures or stacks.
+  if (move.type === 'capture')
+    return top.owner === move.player ? MoveError.CANNOT_CAPTURE_OWN : null;
+  return stackError(piece, target);
 }
 
 /** Applies a pseudo-legal board move. Caller must have validated it. */
@@ -73,36 +63,31 @@ export function executeBoardMove(state: GameState, move: BoardMove): GameState {
   const piece = topPiece(origin);
   if (!piece) throw new Error('executeBoardMove: no piece at origin');
   const target = getStack(state.board, move.to);
-
-  let landed: Stack;
-  let captured = state.captured;
-  let hands = state.hands;
-  if (move.type === 'capture') {
-    // §6.4 every enemy piece in the stack is removed; own pieces stay below.
-    const enemies = target.filter((p) => p.owner !== move.player);
-    landed = [...target.filter((p) => p.owner === move.player), piece];
-    captured = {
-      ...captured,
-      [move.player]: [...captured[move.player], ...enemies.map((p) => p.kind)],
-    };
-  } else if (move.type === 'stack') {
-    const betrayal = applyBetrayal(target, move.player, state.hands[move.player], move.betray);
-    landed = [...betrayal.stack, piece];
-    hands = { ...hands, [move.player]: betrayal.hand };
-    captured = { ...captured, [move.player]: [...captured[move.player], ...betrayal.removed] };
-  } else {
-    landed = [piece];
-  }
-
-  const board = setStack(setStack(state.board, move.from, origin.slice(0, -1)), move.to, landed);
-  return {
+  const advance = (board: Board): GameState => ({
     ...state,
     board,
-    hands,
-    captured,
     turn: opponent(move.player),
     ply: state.ply + 1,
-  };
+  });
+
+  if (move.type === 'capture') {
+    // §6.4 only the top piece is taken; the capturer moves in only if the
+    // square becomes empty, otherwise it stays where it was.
+    const victim = topPiece(target);
+    if (!victim) throw new Error('executeBoardMove: nothing to capture');
+    const remaining = target.slice(0, -1);
+    const board =
+      remaining.length > 0
+        ? setStack(state.board, move.to, remaining)
+        : setStack(setStack(state.board, move.from, origin.slice(0, -1)), move.to, [piece]);
+    return {
+      ...advance(board),
+      captured: { ...state.captured, [move.player]: [...state.captured[move.player], victim.kind] },
+    };
+  }
+
+  const landed: Stack = move.type === 'stack' ? [...target, piece] : [piece];
+  return advance(setStack(setStack(state.board, move.from, origin.slice(0, -1)), move.to, landed));
 }
 
 /** All pseudo-legal board moves for `side`. */
@@ -112,40 +97,26 @@ export function boardMoves(state: GameState, side: PlayerSide): BoardMove[] {
     const origin = getStack(state.board, from);
     const piece = topPiece(origin);
     if (!piece || piece.owner !== side) continue;
-    const tier = origin.length;
-    for (const to of reachableSquares(state.board, from, piece, tier)) {
+    for (const to of reachableSquares(state.board, from, piece, origin.length)) {
       const target = getStack(state.board, to);
       const top = topPiece(target);
       if (!top) {
         moves.push({ type: 'move', player: side, from, to });
         continue;
       }
-      if (target.length > tier) continue;
+      if (stackError(piece, target) === null) moves.push({ type: 'stack', player: side, from, to });
       if (top.owner !== side) moves.push({ type: 'capture', player: side, from, to });
-      if (top.kind === 'marshal' || target.length >= MAX_STACK_HEIGHT) continue;
-      if (piece.kind !== 'tactician') {
-        moves.push({ type: 'stack', player: side, from, to });
-        continue;
-      }
-      for (const betray of betrayalOptions(target, side, state.hands[side])) {
-        moves.push(
-          betray.length > 0
-            ? { type: 'stack', player: side, from, to, betray }
-            : { type: 'stack', player: side, from, to },
-        );
-      }
     }
   }
   return moves;
 }
 
-/** Whether any top piece of `attacker` could capture on `target` (§6.2). */
+/** Whether any top piece of `attacker` can reach `target` (§10.1). */
 export function isSquareAttacked(board: Board, target: Square, attacker: PlayerSide): boolean {
-  const targetHeight = getStack(board, target).length;
   for (const from of allSquares()) {
     const origin = getStack(board, from);
     const piece = topPiece(origin);
-    if (!piece || piece.owner !== attacker || targetHeight > origin.length) continue;
+    if (!piece || piece.owner !== attacker) continue;
     if (reachableSquares(board, from, piece, origin.length).some((sq) => sameSquare(sq, target))) {
       return true;
     }
@@ -153,7 +124,7 @@ export function isSquareAttacked(board: Board, target: Square, attacker: PlayerS
   return false;
 }
 
-/** §10.1 whether `side`'s marshal could be captured by the opponent's next move. */
+/** §10.1 whether `side`'s marshal is within reach of an opponent's top piece. */
 export function isInCheck(board: Board, side: PlayerSide): boolean {
   const marshal = findMarshal(board, side);
   return marshal !== undefined && isSquareAttacked(board, marshal, opponent(side));

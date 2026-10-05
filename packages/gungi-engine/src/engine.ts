@@ -42,11 +42,9 @@ function isSide(value: unknown): value is PlayerSide {
 /** Structural check for untrusted input (e.g. a WebSocket payload). */
 function isWellFormed(move: unknown): move is Move {
   if (typeof move !== 'object' || move === null) return false;
-  const { type, player, betray } = move as Record<string, unknown>;
+  const { type, player } = move as Record<string, unknown>;
   if (typeof type !== 'string' || !MOVE_TYPES.has(type)) return false;
-  if (type !== 'agreeDraw' && !isSide(player)) return false;
-  if (betray !== undefined && !Array.isArray(betray)) return false;
-  return true;
+  return type === 'agreeDraw' || isSide(player);
 }
 
 function finish(state: GameState, result: GameResult): GameState {
