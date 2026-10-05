@@ -400,6 +400,91 @@ describe('§12.2 malformed input', () => {
       MoveError.INVALID_SQUARE,
     );
   });
+
+  const ok = sq(0, 0);
+  const badSquares: unknown[] = [
+    undefined,
+    null,
+    '0,0',
+    [0, 0],
+    { file: 0 },
+    { file: '0', rank: '0' },
+    { file: 0.5, rank: 0 },
+    { file: Number.NaN, rank: 0 },
+    { file: 9, rank: 0 },
+    { file: 0, rank: -1 },
+  ];
+
+  it.each(['move', 'capture', 'stack'] as const)('%s rejects a bad `from` or `to`', (type) => {
+    for (const bad of badSquares) {
+      for (const move of [
+        { type, player: 'black', from: bad, to: ok },
+        { type, player: 'black', from: ok, to: bad },
+      ]) {
+        expect(validateMove(s, move as unknown as Move)).toBe(MoveError.INVALID_SQUARE);
+      }
+    }
+  });
+
+  const badKinds: unknown[] = [undefined, null, 42, 'lancer', 'Pawn', 'toString', '__proto__', {}];
+
+  it('drop rejects a bad kind or square', () => {
+    const t = createPosition({
+      stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))],
+      hands: { black: { pawn: 1 } },
+    });
+    for (const kind of badKinds) {
+      const move = { type: 'drop', player: 'black', kind, to: sq(4, 4) };
+      expect(validateMove(t, move as unknown as Move)).toBe(MoveError.INVALID_MOVE);
+    }
+    for (const to of badSquares) {
+      const move = { type: 'drop', player: 'black', kind: 'pawn', to };
+      expect(validateMove(t, move as unknown as Move)).toBe(MoveError.INVALID_SQUARE);
+    }
+  });
+
+  it('place rejects a bad kind or square', () => {
+    const t = createInitialState();
+    for (const kind of badKinds) {
+      const move = { type: 'place', player: 'black', kind, to: sq(4, 0) };
+      expect(validateMove(t, move as unknown as Move)).toBe(MoveError.INVALID_MOVE);
+    }
+    for (const to of badSquares) {
+      const move = { type: 'place', player: 'black', kind: 'marshal', to };
+      expect(validateMove(t, move as unknown as Move)).toBe(MoveError.INVALID_SQUARE);
+    }
+  });
+
+  it('every move type rejects a bad player', () => {
+    const types = ['place', 'finishPlacement', 'move', 'capture', 'stack', 'drop', 'resign'];
+    for (const type of [...types, 'timeout']) {
+      for (const player of [undefined, null, 0, 'Black', 'red', {}]) {
+        const move = { type, player, kind: 'pawn', from: ok, to: ok };
+        expect(validateMove(s, move as unknown as Move)).toBe(MoveError.INVALID_MOVE);
+      }
+    }
+  });
+
+  it('never throws on arbitrary payloads, in either phase', () => {
+    const rand = rng(99);
+    const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)]!;
+    const types = ['place', 'finishPlacement', 'move', 'capture', 'stack', 'drop', 'resign', 'x'];
+    const squares = [...badSquares, ok, sq(4, 4), sq(8, 8)];
+    const kinds = [...badKinds, 'pawn', 'marshal', 'fortress'];
+    for (const state of [s, createInitialState()]) {
+      for (let i = 0; i < 2000; i++) {
+        const move = {
+          type: pick(types),
+          player: pick(['black', 'white', 'red', undefined]),
+          kind: pick(kinds),
+          from: pick(squares),
+          to: pick(squares),
+        };
+        const error = validateMove(state, move as unknown as Move);
+        expect(error === null || Object.values(MoveError).includes(error)).toBe(true);
+      }
+    }
+  });
 });
 
 describe('§9 → §11 lifecycle', () => {

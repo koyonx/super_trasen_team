@@ -45,7 +45,13 @@ function isSide(value: unknown): value is PlayerSide {
   return value === 'black' || value === 'white';
 }
 
-/** Structural check for untrusted input (e.g. a WebSocket payload). */
+/**
+ * First gate for untrusted input (e.g. a WebSocket payload): a known `type`
+ * and, except for `agreeDraw`, a valid `player`. The payload is checked by
+ * the per-type validators, which reject bad squares with `INVALID_SQUARE` and
+ * unknown piece kinds with `INVALID_MOVE` before touching the board, so a
+ * malformed move never throws (see the §12.2 malformed-input specs).
+ */
 function isWellFormed(move: unknown): move is Move {
   if (typeof move !== 'object' || move === null) return false;
   const { type, player } = move as Record<string, unknown>;
