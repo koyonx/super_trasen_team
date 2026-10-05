@@ -8,6 +8,14 @@ export const MAX_STACK_HEIGHT = 3;
 
 export type PlayerSide = 'black' | 'white';
 
+/** A board square without tier information. */
+export interface Square {
+  /** 0-indexed file (column), 0..BOARD_SIZE-1 */
+  file: number;
+  /** 0-indexed rank (row), 0..BOARD_SIZE-1; rank 0 is black's back rank */
+  rank: number;
+}
+
 export interface Position {
   /** 0-indexed file (column), 0..BOARD_SIZE-1 */
   file: number;
