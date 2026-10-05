@@ -9,6 +9,7 @@ import {
   validateMove,
 } from './engine';
 import { handTotal, opponent } from './pieces';
+import { ARMY_LIMIT } from './placing';
 import { createPosition, positionKey } from './position';
 import { createInitialState } from './setup';
 import { B, W, at, sq } from './test-helpers';
@@ -447,41 +448,59 @@ function piecesOf(state: GameState, side: PlayerSide): number {
   );
 }
 
-describe('random self-play invariants', () => {
-  it.each([1, 2, 3])('seed %i: every legal move applies and invariants hold', (seed) => {
-    const rand = rng(seed);
-    let state = createInitialState();
-    for (let i = 0; i < 160 && !isGameOver(state); i++) {
-      const moves = legalMoves(state);
-      expect(moves.length).toBeGreaterThan(0);
-      // Prefer finishing placement early sometimes so the play phase is reached.
-      const finishMove = moves.find((m) => m.type === 'finishPlacement');
-      const move =
-        finishMove && rand() < 0.15 ? finishMove : moves[Math.floor(rand() * moves.length)]!;
-      const result = applyMove(state, move);
-      expect(result.ok).toBe(true);
-      if (!result.ok) break;
-      state = result.state;
+function checkInvariants(state: GameState): void {
+  // JSON round-trip safe.
+  expect(JSON.parse(JSON.stringify(state))).toEqual(state);
+  for (const side of ['black', 'white'] as const) {
+    // §3.1 piece conservation: board + hand + removed by opponent = 38.
+    expect(
+      piecesOf(state, side) + handTotal(state.hands[side]) + state.captured[opponent(side)].length,
+    ).toBe(38);
+    // §3.3 at most 26 own pieces on the board.
+    expect(piecesOf(state, side)).toBeLessThanOrEqual(ARMY_LIMIT);
+  }
+  for (const s of allSquares()) {
+    const stack = getStack(state.board, s);
+    // §4.1 no stack exceeds 3.
+    expect(stack.length).toBeLessThanOrEqual(3);
+    // §4.4 nothing sits on a marshal; §4.5 a fortress never sits on a piece.
+    stack.slice(0, -1).forEach((p) => expect(p.kind).not.toBe('marshal'));
+    stack.slice(1).forEach((p) => expect(p.kind).not.toBe('fortress'));
+  }
+  // §11.4 the game ends as soon as the counter passes the limit.
+  expect(state.quietPlies).toBeLessThanOrEqual(QUIET_PLY_LIMIT + 1);
+  if (state.phase !== 'finished') {
+    expect(state.quietPlies).toBeLessThanOrEqual(QUIET_PLY_LIMIT);
+    // §10.1 the side that just moved is never left in check.
+    expect(inCheck({ ...state, turn: opponent(state.turn) })).toBe(false);
+  }
+}
 
-      // JSON round-trip safe.
-      expect(JSON.parse(JSON.stringify(state))).toEqual(state);
-      for (const side of ['black', 'white'] as const) {
-        // Piece conservation: board + hand + removed by opponent = 38.
-        expect(
-          piecesOf(state, side) +
-            handTotal(state.hands[side]) +
-            state.captured[opponent(side)].length,
-        ).toBe(38);
+describe('random self-play invariants', () => {
+  it.each([1, 2, 3, 4, 5, 6])(
+    'seed %i: every legal move applies and invariants hold',
+    (seed) => {
+      const rand = rng(seed);
+      let state = createInitialState();
+      for (let i = 0; i < 400 && !isGameOver(state); i++) {
+        const moves = legalMoves(state);
+        expect(moves.length).toBeGreaterThan(0);
+        // A few other generated moves must validate as well.
+        for (let k = 0; k < 2; k++) {
+          expect(validateMove(state, moves[Math.floor(rand() * moves.length)]!)).toBeNull();
+        }
+        // Prefer finishing placement early sometimes so the play phase is reached.
+        const finishMove = moves.find((m) => m.type === 'finishPlacement');
+        const move =
+          finishMove && rand() < 0.15 ? finishMove : moves[Math.floor(rand() * moves.length)]!;
+        const result = applyMove(state, move);
+        expect(result.ok).toBe(true);
+        if (!result.ok) break;
+        state = result.state;
+        checkInvariants(state);
       }
-      // No stack exceeds 3 and nothing sits on a marshal.
-      for (const s of allSquares()) {
-        const stack = getStack(state.board, s);
-        expect(stack.length).toBeLessThanOrEqual(3);
-        stack.slice(0, -1).forEach((p) => expect(p.kind).not.toBe('marshal'));
-      }
-      // The side that just moved is never left in check (unless the game ended).
-      if (state.phase === 'play')
-        expect(inCheck({ ...state, turn: opponent(state.turn) })).toBe(false);
-    }
-  });
+      if (isGameOver(state)) expect(legalMoves(state)).toEqual([]);
+    },
+    30_000,
+  );
 });
