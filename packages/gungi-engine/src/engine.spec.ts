@@ -10,7 +10,7 @@ import {
 } from './engine';
 import { handTotal, opponent } from './pieces';
 import { ARMY_LIMIT } from './placing';
-import { createPosition, positionKey } from './position';
+import { createPosition, positionKey, stateError } from './position';
 import { createInitialState } from './setup';
 import { B, W, at, rng, sq } from './test-helpers';
 import type { BoardMove, GameState, Move, PieceKind, PlayerSide } from './types';
@@ -590,8 +590,9 @@ function piecesOf(state: GameState, side: PlayerSide): number {
 }
 
 function checkInvariants(state: GameState): void {
-  // JSON round-trip safe.
+  // JSON round-trip safe, and accepted by the restore gate (§12.1).
   expect(JSON.parse(JSON.stringify(state))).toEqual(state);
+  expect(stateError(JSON.parse(JSON.stringify(state)))).toBeNull();
   for (const side of ['black', 'white'] as const) {
     // §3.1 piece conservation: board + hand + removed by opponent = 38.
     expect(

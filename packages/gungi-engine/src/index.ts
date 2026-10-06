@@ -48,6 +48,7 @@ export {
   createPosition,
   positionError,
   positionKey,
+  stateError,
 } from './position';
 export type { PositionSetup } from './position';
 export {

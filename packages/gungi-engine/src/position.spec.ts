@@ -2,9 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { applyMove, inCheck, isGameOver, legalMoves } from './engine';
 import { ARMY_LIMIT } from './placing';
 import type { PositionSetup } from './position';
-import { InvalidPositionError, PositionError, createPosition, positionError } from './position';
+import {
+  InvalidPositionError,
+  PositionError,
+  createPosition,
+  positionError,
+  stateError,
+} from './position';
+import { createInitialState } from './setup';
 import { B, W, at, rng, sq } from './test-helpers';
-import type { Piece, PieceKind } from './types';
+import type { GameState, Piece, PieceKind } from './types';
 
 const KINGS = [at(0, 0, B('marshal')), at(8, 8, W('marshal'))];
 
@@ -331,3 +338,178 @@ describe('§12.1 positionError on malformed input', () => {
     }
   });
 });
+
+describe('§12.1 stateError (restoring a state from storage or the network)', () => {
+  /** A state as it would come back from JSON, with some fields replaced. */
+  const restored = (state: GameState, patch: Record<string, unknown> = {}): unknown => ({
+    ...(JSON.parse(JSON.stringify(state)) as Record<string, unknown>),
+    ...patch,
+  });
+  /** `board[rank][file]` as plain JSON with one stack replaced. */
+  const boardWith = (state: GameState, file: number, rank: number, stack: unknown[]) => {
+    const board = JSON.parse(JSON.stringify(state.board)) as unknown[][][];
+    board[rank]![file] = stack;
+    return board;
+  };
+  const midGame = createPosition({
+    stacks: [...KINGS, at(4, 4, W('pawn'), B('samurai'))],
+    hands: { black: { pawn: 2 } },
+    turn: 'white',
+    quietPlies: 3,
+  });
+
+  it('accepts states the engine produced', () => {
+    expect(stateError(restored(createInitialState()))).toBeNull();
+    expect(stateError(restored(midGame))).toBeNull();
+    expect(
+      stateError(
+        restored(midGame, { phase: 'finished', result: { winner: 'black', reason: 'timeout' } }),
+      ),
+    ).toBeNull();
+  });
+
+  it('catches a marshal buried under a piece, on which legalMoves would throw', () => {
+    // Black's marshal ends up under a white general: [W pawn, B marshal, W general]. Taking
+    // the general would put the capturer on the marshal, which the engine refuses to build.
+    const base = createPosition({ stacks: [...KINGS, at(4, 3, B('pawn'))] });
+    const board = JSON.parse(JSON.stringify(base.board)) as Piece[][][];
+    board[0]![0] = [];
+    board[4]![4] = [W('pawn'), B('marshal'), W('general')];
+    const corrupt: GameState = { ...base, board };
+    expect(stateError(corrupt)).toBe(PositionError.MARSHAL_NOT_ON_TOP);
+    expect(() => legalMoves(corrupt)).toThrow('corrupt target stack');
+  });
+
+  it('rejects a structurally broken state', () => {
+    for (const input of [null, 5, 'x', [], {}]) {
+      expect(stateError(input)).not.toBeNull();
+    }
+    expect(stateError(restored(midGame, { board: undefined }))).toBe(PositionError.MALFORMED);
+    expect(stateError(restored(midGame, { board: midGame.board.slice(1) }))).toBe(
+      PositionError.MALFORMED,
+    );
+    expect(stateError(restored(midGame, { board: boardWith(midGame, 4, 4, null as never) }))).toBe(
+      PositionError.MALFORMED,
+    );
+    expect(stateError(restored(midGame, { board: boardWith(midGame, 4, 4, [null]) }))).toBe(
+      PositionError.INVALID_PIECE,
+    );
+    expect(stateError(restored(midGame, { hands: { black: midGame.hands.black } }))).toBe(
+      PositionError.MALFORMED,
+    );
+    const { pawn: _, ...noPawn } = midGame.hands.white;
+    expect(stateError(restored(midGame, { hands: { ...midGame.hands, white: noPawn } }))).toBe(
+      PositionError.INVALID_COUNT,
+    );
+    expect(stateError(restored(midGame, { placementDone: { black: 1, white: true } }))).toBe(
+      PositionError.MALFORMED,
+    );
+    expect(stateError(restored(midGame, { captured: { black: ['lancer'], white: [] } }))).toBe(
+      PositionError.INVALID_PIECE,
+    );
+    expect(stateError(restored(midGame, { ply: -1 }))).toBe(PositionError.INVALID_COUNT);
+    expect(stateError(restored(midGame, { turn: 'red' }))).toBe(PositionError.INVALID_TURN);
+  });
+
+  it('checks the phase against placementDone and the result', () => {
+    expect(stateError(restored(midGame, { phase: 'over' }))).toBe(PositionError.INVALID_PHASE);
+    expect(stateError(restored(midGame, { placementDone: { black: true, white: false } }))).toBe(
+      PositionError.INVALID_PHASE,
+    );
+    expect(stateError(restored(midGame, { result: { winner: 'black', reason: 'timeout' } }))).toBe(
+      PositionError.INVALID_RESULT,
+    );
+    for (const result of [
+      null,
+      { winner: 'black', reason: 'stalemate' },
+      { winner: null, reason: 'checkmate' },
+      { winner: 'black', reason: 'boredom' },
+    ]) {
+      expect(stateError(restored(midGame, { phase: 'finished', result }))).toBe(
+        PositionError.INVALID_RESULT,
+      );
+    }
+  });
+
+  it('§9 checks placement-phase states', () => {
+    const initial = createInitialState();
+    // §9.2 nothing is placed before the marshal.
+    expect(stateError(restored(initial, { board: boardWith(initial, 4, 1, [B('pawn')]) }))).toBe(
+      PositionError.MARSHAL_COUNT,
+    );
+    // §9.4 the turn never goes to a side that has finished placing.
+    expect(stateError(restored(initial, { placementDone: { black: true, white: false } }))).toBe(
+      PositionError.INVALID_TURN,
+    );
+  });
+
+  it('§3.1 counts captured pieces against the roster', () => {
+    expect(
+      stateError(restored(midGame, { captured: { black: [], white: ['musket'] } })),
+    ).toBeNull();
+    expect(
+      stateError(restored(midGame, { captured: { black: [], white: ['musket', 'musket'] } })),
+    ).toBe(PositionError.ROSTER_EXCEEDED);
+  });
+
+  it('§10.1 allows the side not to move in check only where a game allows it', () => {
+    // Black's marshal on (4, 2) is attacked by a white tier-3 cannon on (4, 6).
+    const checked = createPosition({
+      stacks: [
+        at(4, 2, B('marshal')),
+        at(4, 6, W('general'), W('general'), W('cannon')),
+        KINGS[1]!,
+      ],
+      turn: 'white',
+    });
+    expect(stateError(restored(checked))).toBeNull();
+    // Not after a capture has been played.
+    expect(stateError(restored(checked, { captured: { black: [], white: ['pawn'] } }))).toBe(
+      PositionError.OPPONENT_IN_CHECK,
+    );
+    // §9.5 in placement, once black has finished white may keep placing checks.
+    const placing = { phase: 'placement', placementDone: { black: true, white: false } };
+    expect(stateError(restored(checked, placing))).toBeNull();
+    expect(
+      stateError(restored(checked, { ...placing, placementDone: { black: false, white: false } })),
+    ).toBe(PositionError.OPPONENT_IN_CHECK);
+    // A finished game may end in any position (e.g. resigned while in check).
+    expect(
+      stateError(
+        restored(checked, {
+          phase: 'finished',
+          turn: 'black',
+          result: { winner: 'white', reason: 'resignation' },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it.each([1, 2, 3])('seed %i: never throws on randomly corrupted states', (seed) => {
+    const rand = rng(seed);
+    const codes = new Set<unknown>([null, ...Object.values(PositionError)]);
+    const values = [null, undefined, 0, -1, 2.5, 'black', 'play', 'pawn', true, [], {}, [[]]];
+    const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)]!;
+    for (let i = 0; i < 300; i++) {
+      const state = restored(midGame) as Record<string, unknown>;
+      const field = pick(Object.keys(state));
+      const roll = rand();
+      if (field === 'board' && roll < 0.6) {
+        state.board = boardWith(midGame, Math.floor(rand() * 9), Math.floor(rand() * 9), [
+          pick(values),
+        ]);
+      } else if (roll < 0.8 && isObject(state[field])) {
+        (state[field] as Record<string, unknown>)[pick(['black', 'white', 'pawn'])] = pick(values);
+      } else {
+        state[field] = pick(values);
+      }
+      let result: unknown;
+      expect(() => (result = stateError(state))).not.toThrow();
+      expect(codes.has(result)).toBe(true);
+    }
+  });
+});
+
+function isObject(value: unknown): value is object {
+  return typeof value === 'object' && value !== null;
+}

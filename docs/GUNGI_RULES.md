@@ -394,6 +394,21 @@ gungi.js 内部で食い違っている。本エンジンは合法手判定に�
       呼び出し側が判定する: `legalMoves(state).length === 0` なら終局で、`inCheck(state)` が真なら詰み（§11.2）、偽なら手詰まり（§11.3）。
       `isGameOver` は `phase` を見るだけなので、この局面では `false` を返す
     - 配置の経緯に依存する条件（各駒が自陣内にあるか等）。`createPosition` は手順を持たないため
+- `stateError(state)` は `GameState` 全体を検査し、理由コードまたは `null` を返す（任意の JSON 値に対して例外を投げない）。
+  **DB・WebSocket などから復元した状態をエンジンに渡す前の関門として、これを呼ぶことを推奨する**（壊れた状態は下記のとおり例外の原因になる）。
+  - 全フィールドの構造（`board` が 9×9 の駒配列、`hands` が全駒種の個数、`placementDone` が真偽値、`captured` が駒種の配列、
+    `ply` / `quietPlies` が 0 以上の整数）（`MALFORMED`, `INVALID_PIECE`, `INVALID_COUNT`, `INVALID_TURN`）
+  - `phase` が既知の値で `placementDone` と矛盾しない（`play` なら両者済、`placement` なら未済の側がいる）（`INVALID_PHASE`）。
+    配置フェーズで手番が済の側にない（`INVALID_TURN`、§9.4）
+  - `result` は `finished` のときだけ存在し、`reason` が §11 の値で、引き分けの理由なら `winner: null`、それ以外は勝者がいる（`INVALID_RESULT`）
+  - `positionError` と同じ盤面の不変条件（`STACK_TOO_HIGH`, `MARSHAL_NOT_ON_TOP`, `ARMY_LIMIT`）
+  - フェーズに応じた駒数: 帥は各陣営 1 枚以下で、対局フェーズでは必ず 1 枚、配置フェーズでは駒を置いた・済を宣言した側は 1 枚（§9.2）。
+    盤上＋持ち駒＋相手に取られた駒が駒種ごとに §3.1 の枚数以下（`MARSHAL_COUNT`, `ROSTER_EXCEEDED`）
+  - 手番でない側の帥が攻撃されていない（`OPPONENT_IN_CHECK`）。例外は配置フェーズでその側が済を宣言済みの場合（§9.5）と、
+    対局フェーズ開始直後（§11.1。手番が白・白は王手されていない・`quietPlies` が 0・取りがまだない）。終局後は検査しない
+  - `positionError` と同じく、未判定の詰み・手詰まり・上限超えの `quietPlies` は受け入れ、手順の再現（棋譜の検証）は行わない
+- `applyMove` / `validateMove` / `legalMoves` などは、上記の不変条件を満たす状態（`createInitialState` / `createPosition` / `applyMove`
+  が返したもの）を前提とする。壊れた状態ではプログラムエラーとして例外を投げることがある（着手 `Move` は不正でも例外にならず §12.3 のコードを返す）。
 
 ### §12.2 着手 (`Move`)
 

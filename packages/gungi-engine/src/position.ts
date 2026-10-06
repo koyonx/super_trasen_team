@@ -1,9 +1,19 @@
-import { MAX_STACK_HEIGHT } from '@gungi/shared';
+import { BOARD_SIZE, MAX_STACK_HEIGHT } from '@gungi/shared';
 import { allSquares, createEmptyBoard, getStack, isValidSquare, setStack } from './board';
 import { PIECE_GLYPHS, ROSTER, emptyHand, isPieceKind, opponent } from './pieces';
 import { ARMY_LIMIT } from './placing';
 import { isInCheck } from './rules';
-import type { Board, GameState, Hand, Piece, PieceKind, PlayerSide, Square } from './types';
+import type {
+  Board,
+  GameEndReason,
+  GamePhase,
+  GameState,
+  Hand,
+  Piece,
+  PieceKind,
+  PlayerSide,
+  Square,
+} from './types';
 import { PIECE_KINDS } from './types';
 
 function handKey(hand: Hand): string {
@@ -42,7 +52,7 @@ export interface PositionSetup {
   readonly quietPlies?: number;
 }
 
-/** §12.1 reasons `createPosition` rejects a setup. */
+/** §12.1 reasons `createPosition` rejects a setup and `stateError` rejects a state. */
 export const PositionError = {
   /** Not the expected shape (e.g. `stacks` is not an array, a hand is not an object). */
   MALFORMED: 'MALFORMED',
@@ -58,6 +68,10 @@ export const PositionError = {
   INVALID_TURN: 'INVALID_TURN',
   /** §10.1 the side not to move is in check, which no legal move leaves behind. */
   OPPONENT_IN_CHECK: 'OPPONENT_IN_CHECK',
+  /** `stateError` only: unknown phase, or a phase that contradicts `placementDone`. */
+  INVALID_PHASE: 'INVALID_PHASE',
+  /** `stateError` only: `result` missing, malformed or set outside the finished phase. */
+  INVALID_RESULT: 'INVALID_RESULT',
 } as const;
 
 export type PositionError = (typeof PositionError)[keyof typeof PositionError];
@@ -71,6 +85,8 @@ export class InvalidPositionError extends Error {
 }
 
 const SIDES: readonly PlayerSide[] = ['black', 'white'];
+
+const NO_CAPTURES: Readonly<Record<PlayerSide, readonly PieceKind[]>> = { black: [], white: [] };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -160,19 +176,29 @@ function countOnBoard(board: Board, side: PlayerSide, kind?: PieceKind): number 
   return n;
 }
 
-/** §3.1 / §3.3 / §9.3 material invariants of a play-phase position. */
+/**
+ * §3.1 / §3.3 / §9.3 material invariants. `captured` lists what each side
+ * has taken; those pieces still count against their owner's roster.
+ * `marshalRequired` tells whether the side must have its marshal on the
+ * board (always in play; in placement once it has placed anything).
+ */
 function materialError(
   board: Board,
   hands: Readonly<Record<PlayerSide, Hand>>,
+  captured: Readonly<Record<PlayerSide, readonly PieceKind[]>>,
+  marshalRequired: (side: PlayerSide) => boolean,
 ): PositionError | null {
   for (const side of SIDES) {
-    // A play-phase position always has both marshals on the board (§9.3, §11.1).
-    if (countOnBoard(board, side, 'marshal') !== 1) return PositionError.MARSHAL_COUNT;
+    const marshals = countOnBoard(board, side, 'marshal');
+    if (marshals > 1 || (marshals === 0 && marshalRequired(side))) {
+      return PositionError.MARSHAL_COUNT;
+    }
     if (countOnBoard(board, side) > ARMY_LIMIT) return PositionError.ARMY_LIMIT;
+    const lost = captured[opponent(side)];
     for (const kind of PIECE_KINDS) {
-      if (countOnBoard(board, side, kind) + hands[side][kind] > ROSTER[kind]) {
-        return PositionError.ROSTER_EXCEEDED;
-      }
+      const total =
+        countOnBoard(board, side, kind) + hands[side][kind] + lost.filter((k) => k === kind).length;
+      if (total > ROSTER[kind]) return PositionError.ROSTER_EXCEEDED;
     }
   }
   return null;
@@ -188,8 +214,17 @@ function materialError(
  * position can be that one.
  */
 function checkError(board: Board, turn: PlayerSide, atPlayStart: boolean): PositionError | null {
+  return opponentCheckError(board, turn, atPlayStart && turn === 'white');
+}
+
+/** `OPPONENT_IN_CHECK` unless that is allowed here and the side to move is safe. */
+function opponentCheckError(
+  board: Board,
+  turn: PlayerSide,
+  allowed: boolean,
+): PositionError | null {
   if (!isInCheck(board, opponent(turn))) return null;
-  if (atPlayStart && turn === 'white' && !isInCheck(board, turn)) return null;
+  if (allowed && !isInCheck(board, turn)) return null;
   return PositionError.OPPONENT_IN_CHECK;
 }
 
@@ -212,7 +247,8 @@ function parseSetup(setup: unknown): Parsed<ParsedSetup> {
   if (!hands.ok) return hands;
   const error =
     boardError(board.value) ??
-    materialError(board.value, hands.value) ??
+    // A play-phase position always has both marshals on the board (§9.3, §11.1).
+    materialError(board.value, hands.value, NO_CAPTURES, () => true) ??
     checkError(board.value, turn, quietPlies === 0);
   if (error) return fail(error);
   return { ok: true, value: { board: board.value, hands: hands.value, turn, quietPlies } };
@@ -258,4 +294,132 @@ export function createPosition(setup: PositionSetup): GameState {
     quietPlies,
     result: null,
   };
+}
+
+const PHASES: ReadonlySet<unknown> = new Set<GamePhase>(['placement', 'play', 'finished']);
+
+/** §11 end reasons and whether each one has a winner. */
+const END_REASONS: Readonly<Record<GameEndReason, boolean>> = {
+  marshalCaptured: true,
+  checkmate: true,
+  stalemate: false,
+  fiftyMoveRule: false,
+  resignation: true,
+  timeout: true,
+  agreement: false,
+};
+
+/** A full `board[rank][file]` grid of piece arrays. Never throws. */
+function parseBoard(board: unknown): Parsed<Board> {
+  const isGrid = (value: unknown): value is unknown[] =>
+    Array.isArray(value) && value.length === BOARD_SIZE;
+  if (!isGrid(board) || !board.every(isGrid)) return fail(PositionError.MALFORMED);
+  const rows = board as unknown[][];
+  if (!rows.every((row) => row.every((stack) => Array.isArray(stack)))) {
+    return fail(PositionError.MALFORMED);
+  }
+  const stacks = rows.flat() as unknown[][];
+  if (!stacks.every((stack) => stack.every(isPiece))) return fail(PositionError.INVALID_PIECE);
+  return { ok: true, value: board as Board };
+}
+
+/** A hand listing every piece kind exactly once. Never throws. */
+function parseFullHand(hand: unknown): Parsed<Hand> {
+  if (!isRecord(hand)) return fail(PositionError.MALFORMED);
+  if (!Object.keys(hand).every(isPieceKind)) return fail(PositionError.INVALID_PIECE);
+  if (!PIECE_KINDS.every((kind) => isCount(hand[kind]))) return fail(PositionError.INVALID_COUNT);
+  return { ok: true, value: hand as Hand };
+}
+
+/** A `{ black, white }` pair whose two values pass `parse`. Never throws. */
+function parsePair<T>(
+  value: unknown,
+  parse: (side: unknown) => Parsed<T>,
+): Parsed<Record<PlayerSide, T>> {
+  if (!isRecord(value)) return fail(PositionError.MALFORMED);
+  const black = parse(value.black);
+  if (!black.ok) return black;
+  const white = parse(value.white);
+  if (!white.ok) return white;
+  return { ok: true, value: { black: black.value, white: white.value } };
+}
+
+const parseFlag = (value: unknown): Parsed<boolean> =>
+  typeof value === 'boolean' ? { ok: true, value } : fail(PositionError.MALFORMED);
+
+function parseCaptured(value: unknown): Parsed<readonly PieceKind[]> {
+  if (!Array.isArray(value)) return fail(PositionError.MALFORMED);
+  if (!value.every(isPieceKind)) return fail(PositionError.INVALID_PIECE);
+  return { ok: true, value: value as PieceKind[] };
+}
+
+function resultError(phase: GamePhase, result: unknown): PositionError | null {
+  if (phase !== 'finished') return result === null ? null : PositionError.INVALID_RESULT;
+  if (!isRecord(result) || typeof result.reason !== 'string') return PositionError.INVALID_RESULT;
+  if (!Object.hasOwn(END_REASONS, result.reason)) return PositionError.INVALID_RESULT;
+  const hasWinner = END_REASONS[result.reason as GameEndReason];
+  const ok = hasWinner ? isSide(result.winner) : result.winner === null;
+  return ok ? null : PositionError.INVALID_RESULT;
+}
+
+/**
+ * §12.1 why `state` is not a game state the engine can work with, or `null`.
+ * Never throws, whatever the input. Use it as the gate before handing a state
+ * restored from storage or the network to `applyMove` / `legalMoves`, which
+ * assume a well-formed state and may throw on a corrupt one.
+ *
+ * Checks the shape of every field, the result against the phase, the board
+ * invariants of `positionError` and phase-aware material: in placement a
+ * side has its marshal once it has placed anything (§9.2), in play both
+ * marshals are on the board, and captured pieces count against the roster.
+ * The side not to move may be in check only where a legal game allows it:
+ * in placement once that side has finished (§9.5), and in play right after
+ * placement (§11.1, white to move, no quiet ply and no capture yet). Like
+ * `positionError` it accepts an unconcluded mate, stalemate or quiet-ply
+ * counter past the limit, and it does not replay history.
+ */
+export function stateError(state: unknown): PositionError | null {
+  if (!isRecord(state)) return PositionError.MALFORMED;
+  const { phase, turn } = state;
+  if (!PHASES.has(phase)) return PositionError.INVALID_PHASE;
+  if (!isSide(turn)) return PositionError.INVALID_TURN;
+  if (!isCount(state.ply) || !isCount(state.quietPlies)) return PositionError.INVALID_COUNT;
+  const board = parseBoard(state.board);
+  if (!board.ok) return board.error;
+  const hands = parsePair(state.hands, parseFullHand);
+  if (!hands.ok) return hands.error;
+  const done = parsePair(state.placementDone, parseFlag);
+  if (!done.ok) return done.error;
+  const captured = parsePair(state.captured, parseCaptured);
+  if (!captured.ok) return captured.error;
+  const gamePhase = phase as GamePhase;
+  const resultErr = resultError(gamePhase, state.result);
+  if (resultErr) return resultErr;
+
+  // §9.3 / §9.4 play starts once both sides have finished placing, and the
+  // turn never goes to a side that has finished.
+  const bothDone = done.value.black && done.value.white;
+  if ((gamePhase === 'play' && !bothDone) || (gamePhase === 'placement' && bothDone)) {
+    return PositionError.INVALID_PHASE;
+  }
+  if (gamePhase === 'placement' && done.value[turn]) return PositionError.INVALID_TURN;
+
+  const marshalRequired = (side: PlayerSide): boolean => {
+    if (gamePhase === 'play') return true;
+    if (gamePhase === 'finished') return false;
+    return done.value[side] || countOnBoard(board.value, side) > 0;
+  };
+  const error =
+    boardError(board.value) ??
+    materialError(board.value, hands.value, captured.value, marshalRequired);
+  if (error) return error;
+
+  if (gamePhase === 'placement') {
+    return opponentCheckError(board.value, turn, done.value[opponent(turn)]);
+  }
+  if (gamePhase === 'play') {
+    const noCaptures = captured.value.black.length === 0 && captured.value.white.length === 0;
+    return checkError(board.value, turn, state.quietPlies === 0 && noCaptures);
+  }
+  return null;
 }

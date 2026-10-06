@@ -24,6 +24,7 @@ describe('§12 public API', () => {
       'inCheck',
       'positionKey',
       'positionError',
+      'stateError',
     ] as const) {
       expect(typeof engine[name]).toBe('function');
     }
@@ -35,7 +36,7 @@ describe('§12 public API', () => {
 
   it('exposes the createPosition error type', () => {
     expect(() => engine.createPosition({})).toThrow(engine.InvalidPositionError);
-    expect(Object.keys(engine.PositionError)).toHaveLength(12);
+    expect(Object.keys(engine.PositionError)).toHaveLength(14);
   });
 
   it('plays a short game through the public API only', () => {
@@ -57,5 +58,6 @@ describe('§12 public API', () => {
     }
     expect(state.result).toEqual({ winner: 'black', reason: 'resignation' });
     expect(JSON.parse(JSON.stringify(state))).toEqual(state);
+    expect(engine.stateError(JSON.parse(JSON.stringify(state)))).toBeNull();
   });
 });
