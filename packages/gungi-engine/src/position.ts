@@ -2,7 +2,7 @@ import { MAX_STACK_HEIGHT } from '@gungi/shared';
 import { allSquares, createEmptyBoard, getStack, isValidSquare, setStack } from './board';
 import { PIECE_GLYPHS, ROSTER, emptyHand, isPieceKind } from './pieces';
 import { ARMY_LIMIT } from './placing';
-import type { GameState, Hand, Piece, PieceKind, PlayerSide, Square } from './types';
+import type { Board, GameState, Hand, Piece, PieceKind, PlayerSide, Square } from './types';
 import { PIECE_KINDS } from './types';
 
 function handKey(hand: Hand): string {
@@ -43,6 +43,8 @@ export interface PositionSetup {
 
 /** §12.1 reasons `createPosition` rejects a setup. */
 export const PositionError = {
+  /** Not the expected shape (e.g. `stacks` is not an array, a hand is not an object). */
+  MALFORMED: 'MALFORMED',
   INVALID_SQUARE: 'INVALID_SQUARE',
   DUPLICATE_SQUARE: 'DUPLICATE_SQUARE',
   INVALID_PIECE: 'INVALID_PIECE',
@@ -67,73 +69,145 @@ export class InvalidPositionError extends Error {
 
 const SIDES: readonly PlayerSide[] = ['black', 'white'];
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function isSide(value: unknown): value is PlayerSide {
   return value === 'black' || value === 'white';
 }
 
 function isPiece(value: unknown): value is Piece {
-  if (typeof value !== 'object' || value === null) return false;
-  const { kind, owner } = value as Record<string, unknown>;
-  return isPieceKind(kind) && isSide(owner);
+  if (!isRecord(value)) return false;
+  return isPieceKind(value.kind) && isSide(value.owner);
 }
 
 function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
-function stacksError(setup: PositionSetup): PositionError | null {
+type Parsed<T> =
+  { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: PositionError };
+
+const fail = (error: PositionError): Parsed<never> => ({ ok: false, error });
+
+/** Structural parse of `setup.stacks` into a board. Never throws. */
+function parseStacks(stacks: unknown): Parsed<Board> {
+  if (stacks === undefined) return { ok: true, value: createEmptyBoard() };
+  if (!Array.isArray(stacks)) return fail(PositionError.MALFORMED);
+  let board = createEmptyBoard();
   const seen = new Set<string>();
-  for (const { square, pieces } of setup.stacks ?? []) {
-    if (!isValidSquare(square)) return PositionError.INVALID_SQUARE;
+  for (const entry of stacks as unknown[]) {
+    if (!isRecord(entry)) return fail(PositionError.MALFORMED);
+    const { square, pieces } = entry;
+    if (!isValidSquare(square)) return fail(PositionError.INVALID_SQUARE);
     const key = `${square.file},${square.rank}`;
-    if (seen.has(key)) return PositionError.DUPLICATE_SQUARE;
+    if (seen.has(key)) return fail(PositionError.DUPLICATE_SQUARE);
     seen.add(key);
-    if (!Array.isArray(pieces) || !pieces.every(isPiece)) return PositionError.INVALID_PIECE;
-    if (pieces.length > MAX_STACK_HEIGHT) return PositionError.STACK_TOO_HIGH;
+    if (!Array.isArray(pieces) || !pieces.every(isPiece)) return fail(PositionError.INVALID_PIECE);
+    board = setStack(
+      board,
+      square,
+      pieces.map((p: Piece) => ({ kind: p.kind, owner: p.owner })),
+    );
+  }
+  return { ok: true, value: board };
+}
+
+/** Structural parse of one side's partial hand. Never throws. */
+function parseHand(hand: unknown): Parsed<Hand> {
+  if (hand === undefined) return { ok: true, value: emptyHand() };
+  if (!isRecord(hand)) return fail(PositionError.MALFORMED);
+  const out: Record<PieceKind, number> = { ...emptyHand() };
+  for (const [kind, count] of Object.entries(hand)) {
+    if (!isPieceKind(kind)) return fail(PositionError.INVALID_PIECE);
+    if (!isCount(count)) return fail(PositionError.INVALID_COUNT);
+    out[kind] = count;
+  }
+  return { ok: true, value: out };
+}
+
+function parseHands(hands: unknown): Parsed<Record<PlayerSide, Hand>> {
+  if (hands !== undefined && !isRecord(hands)) return fail(PositionError.MALFORMED);
+  const black = parseHand(hands?.black);
+  if (!black.ok) return black;
+  const white = parseHand(hands?.white);
+  if (!white.ok) return white;
+  return { ok: true, value: { black: black.value, white: white.value } };
+}
+
+/** §4.1 / §4.4 per-stack invariants on a structurally valid board. */
+function boardError(board: Board): PositionError | null {
+  for (const sq of allSquares()) {
+    const stack = getStack(board, sq);
+    if (stack.length > MAX_STACK_HEIGHT) return PositionError.STACK_TOO_HIGH;
     // §4.4 nothing ever sits on a marshal, captures included (§6.4).
-    if (pieces.slice(0, -1).some((p) => p.kind === 'marshal')) {
+    if (stack.slice(0, -1).some((p) => p.kind === 'marshal')) {
       return PositionError.MARSHAL_NOT_ON_TOP;
     }
   }
   return null;
 }
 
-function countsError(setup: PositionSetup): PositionError | null {
-  const onBoard = (side: PlayerSide, kind?: PieceKind): number =>
-    (setup.stacks ?? []).reduce(
-      (n, { pieces }) =>
-        n + pieces.filter((p) => p.owner === side && (!kind || p.kind === kind)).length,
-      0,
-    );
+function countOnBoard(board: Board, side: PlayerSide, kind?: PieceKind): number {
+  let n = 0;
+  for (const sq of allSquares()) {
+    for (const p of getStack(board, sq)) if (p.owner === side && (!kind || p.kind === kind)) n++;
+  }
+  return n;
+}
+
+/** §3.1 / §3.3 / §9.3 material invariants of a play-phase position. */
+function materialError(
+  board: Board,
+  hands: Readonly<Record<PlayerSide, Hand>>,
+): PositionError | null {
   for (const side of SIDES) {
-    const hand: Record<string, unknown> = setup.hands?.[side] ?? {};
-    for (const [kind, count] of Object.entries(hand)) {
-      if (!isPieceKind(kind)) return PositionError.INVALID_PIECE;
-      if (!isCount(count)) return PositionError.INVALID_COUNT;
-    }
     // A play-phase position always has both marshals on the board (§9.3, §11.1).
-    if (onBoard(side, 'marshal') !== 1) return PositionError.MARSHAL_COUNT;
-    if (onBoard(side) > ARMY_LIMIT) return PositionError.ARMY_LIMIT;
+    if (countOnBoard(board, side, 'marshal') !== 1) return PositionError.MARSHAL_COUNT;
+    if (countOnBoard(board, side) > ARMY_LIMIT) return PositionError.ARMY_LIMIT;
     for (const kind of PIECE_KINDS) {
-      const inHand = (hand[kind] as number | undefined) ?? 0;
-      if (onBoard(side, kind) + inHand > ROSTER[kind]) return PositionError.ROSTER_EXCEEDED;
+      if (countOnBoard(board, side, kind) + hands[side][kind] > ROSTER[kind]) {
+        return PositionError.ROSTER_EXCEEDED;
+      }
     }
   }
   return null;
 }
 
+interface ParsedSetup {
+  readonly board: Board;
+  readonly hands: Readonly<Record<PlayerSide, Hand>>;
+  readonly turn: PlayerSide;
+  readonly quietPlies: number;
+}
+
+/** Parses and validates a setup into fresh data. Never throws. */
+function parseSetup(setup: unknown): Parsed<ParsedSetup> {
+  if (!isRecord(setup)) return fail(PositionError.MALFORMED);
+  const { turn = 'black', quietPlies = 0 } = setup;
+  if (!isSide(turn)) return fail(PositionError.INVALID_TURN);
+  if (!isCount(quietPlies)) return fail(PositionError.INVALID_COUNT);
+  const board = parseStacks(setup.stacks);
+  if (!board.ok) return board;
+  const hands = parseHands(setup.hands);
+  if (!hands.ok) return hands;
+  const error = boardError(board.value) ?? materialError(board.value, hands.value);
+  if (error) return fail(error);
+  return { ok: true, value: { board: board.value, hands: hands.value, turn, quietPlies } };
+}
+
 /**
  * §12.1 why `setup` does not describe a reachable play-phase position, or
- * `null`. Checks only invariants every legal game keeps: square validity,
- * stack height, one marshal per side on top of its stack, the army limit and
- * the roster. A fortress above tier 1 is allowed (§4.5, reached by capture).
+ * `null`. Never throws, whatever the input (it may come straight from JSON).
+ * Checks only invariants every legal game keeps: the shape of the setup,
+ * square validity, stack height, one marshal per side on top of its stack,
+ * the army limit and the roster. A fortress above tier 1 is allowed (§4.5,
+ * reached by capture).
  */
 export function positionError(setup: PositionSetup): PositionError | null {
-  if (setup.turn !== undefined && !isSide(setup.turn)) return PositionError.INVALID_TURN;
-  if (setup.quietPlies !== undefined && !isCount(setup.quietPlies)) {
-    return PositionError.INVALID_COUNT;
-  }
-  return stacksError(setup) ?? countsError(setup);
+  const parsed = parseSetup(setup);
+  return parsed.ok ? null : parsed.error;
 }
 
 /**
@@ -142,24 +216,21 @@ export function positionError(setup: PositionSetup): PositionError | null {
  * Throws `InvalidPositionError` when the setup breaks an invariant checked by
  * `positionError`; a corrupt state would otherwise surface later as wrong
  * rulings. Callers handling untrusted input can call `positionError` first.
+ * The state never shares arrays or objects with `setup`.
  */
 export function createPosition(setup: PositionSetup): GameState {
-  const error = positionError(setup);
-  if (error) throw new InvalidPositionError(error);
-  let board = createEmptyBoard();
-  for (const { square, pieces } of setup.stacks ?? []) {
-    board = setStack(board, square, [...pieces]);
-  }
-  const hand = (side: PlayerSide): Hand => ({ ...emptyHand(), ...setup.hands?.[side] });
+  const parsed = parseSetup(setup);
+  if (!parsed.ok) throw new InvalidPositionError(parsed.error);
+  const { board, hands, turn, quietPlies } = parsed.value;
   return {
     phase: 'play',
     board,
-    hands: { black: hand('black'), white: hand('white') },
-    turn: setup.turn ?? 'black',
+    hands,
+    turn,
     placementDone: { black: true, white: true },
     captured: { black: [], white: [] },
     ply: 0,
-    quietPlies: setup.quietPlies ?? 0,
+    quietPlies,
     result: null,
   };
 }

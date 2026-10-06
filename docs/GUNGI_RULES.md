@@ -374,6 +374,8 @@ gungi.js 内部で食い違っている。本エンジンは合法手判定に�
 - `createPosition(setup)` は任意局面（テスト・AI・棋譜読み込み）から対局フェーズの状態を作る。
   到達し得ない局面を作らないよう、次の不変条件を検査し、違反時は `InvalidPositionError`（`reason` にコード）を投げる。
   投げずに検査したい場合は `positionError(setup)` が理由コードまたは `null` を返す。
+  `positionError` は任意の JSON 値に対して例外を投げない（構造が壊れた入力にもコードを返す）。
+  - `setup` がオブジェクトで、`stacks` が配列、その各要素と `hands`・`hands.black`/`hands.white` がオブジェクト（`MALFORMED`）
   - マス座標が盤内で重複しない／駒の種類・所有者が正しい（`INVALID_SQUARE`, `DUPLICATE_SQUARE`, `INVALID_PIECE`）
   - スタックの高さ ≤ 3（`STACK_TOO_HIGH`、§4.1）
   - 帥は各陣営ちょうど 1 枚（`MARSHAL_COUNT`）で、スタックの最上段にある（`MARSHAL_NOT_ON_TOP`、§4.4）

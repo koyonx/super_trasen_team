@@ -35,7 +35,7 @@ describe('§12 public API', () => {
 
   it('exposes the createPosition error type', () => {
     expect(() => engine.createPosition({})).toThrow(engine.InvalidPositionError);
-    expect(Object.keys(engine.PositionError)).toHaveLength(10);
+    expect(Object.keys(engine.PositionError)).toHaveLength(11);
   });
 
   it('plays a short game through the public API only', () => {

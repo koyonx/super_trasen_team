@@ -12,7 +12,7 @@ import { handTotal, opponent } from './pieces';
 import { ARMY_LIMIT } from './placing';
 import { createPosition, positionKey } from './position';
 import { createInitialState } from './setup';
-import { B, W, at, sq } from './test-helpers';
+import { B, W, at, rng, sq } from './test-helpers';
 import type { BoardMove, GameState, Move, PieceKind, PlayerSide } from './types';
 import { MoveError } from './types';
 
@@ -576,18 +576,6 @@ describe('§9.5 check during placement', () => {
     expect(next.captured.white).toEqual(['marshal']);
   });
 });
-
-/** Deterministic PRNG (mulberry32). */
-function rng(seed: number): () => number {
-  let a = seed;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 function piecesOf(state: GameState, side: PlayerSide): number {
   return allSquares().reduce(

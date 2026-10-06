@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ARMY_LIMIT } from './placing';
 import type { PositionSetup } from './position';
 import { InvalidPositionError, PositionError, createPosition, positionError } from './position';
-import { B, W, at, sq } from './test-helpers';
+import { B, W, at, rng, sq } from './test-helpers';
 import type { Piece, PieceKind } from './types';
 
 const KINGS = [at(0, 0, B('marshal')), at(8, 8, W('marshal'))];
@@ -132,5 +132,131 @@ describe('§12.1 createPosition invariants', () => {
     const s = createPosition({ stacks: [...KINGS, { square: sq(4, 4), pieces }] });
     pieces.push(B('pawn'));
     expect(s.board[4]![4]).toEqual([B('pawn')]);
+  });
+});
+
+describe('§12.1 positionError on malformed input', () => {
+  /** Feeds arbitrary (JSON-like) data the way an untrusted caller would. */
+  const check = (input: unknown) => positionError(input as PositionSetup);
+
+  it('rejects a setup that is not an object', () => {
+    for (const input of [null, undefined, 5, 'x', true, [], [KINGS]]) {
+      expect(check(input)).toBe(PositionError.MALFORMED);
+    }
+  });
+
+  it('rejects stacks that are not an array of objects', () => {
+    for (const stacks of [5, 'x', null, {}, { 0: KINGS[0] }]) {
+      expect(check({ stacks })).toBe(PositionError.MALFORMED);
+    }
+    for (const entry of [null, 5, 'x', [], [sq(0, 0), [B('marshal')]]]) {
+      expect(check({ stacks: [...KINGS, entry] })).toBe(PositionError.MALFORMED);
+    }
+  });
+
+  it('rejects stack entries with a bad square or pieces', () => {
+    expect(check({ stacks: [...KINGS, { pieces: [B('pawn')] }] })).toBe(
+      PositionError.INVALID_SQUARE,
+    );
+    expect(check({ stacks: [...KINGS, { square: null, pieces: [] }] })).toBe(
+      PositionError.INVALID_SQUARE,
+    );
+    for (const pieces of [undefined, null, 5, {}, [null], [5], ['pawn'], [{ kind: 'pawn' }]]) {
+      expect(check({ stacks: [...KINGS, { square: sq(4, 4), pieces }] })).toBe(
+        PositionError.INVALID_PIECE,
+      );
+    }
+  });
+
+  it('rejects hands that are not objects', () => {
+    for (const hands of [null, 5, 'x', [], [{ pawn: 1 }]]) {
+      expect(check({ stacks: KINGS, hands })).toBe(PositionError.MALFORMED);
+    }
+    for (const hand of [null, 5, 'x', true, [], [1, 2]]) {
+      expect(check({ stacks: KINGS, hands: { black: hand } })).toBe(PositionError.MALFORMED);
+      expect(check({ stacks: KINGS, hands: { white: hand } })).toBe(PositionError.MALFORMED);
+    }
+    for (const count of [null, '1', [], {}, NaN, Infinity]) {
+      expect(check({ stacks: KINGS, hands: { black: { pawn: count } } })).toBe(
+        PositionError.INVALID_COUNT,
+      );
+    }
+  });
+
+  it('rejects a non-numeric quietPlies', () => {
+    for (const quietPlies of [null, '0', [], {}, NaN]) {
+      expect(check({ stacks: KINGS, quietPlies })).toBe(PositionError.INVALID_COUNT);
+    }
+  });
+
+  it('copies the hands so the state does not share them with the setup', () => {
+    const hand = { pawn: 1 };
+    const s = createPosition({ stacks: KINGS, hands: { black: hand } });
+    hand.pawn = 5;
+    expect(s.hands.black.pawn).toBe(1);
+    expect(s.hands.white.pawn).toBe(0);
+  });
+
+  /** A random JSON value biased towards the shapes a setup is made of. */
+  function randomValue(rand: () => number, depth: number): unknown {
+    const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)]!;
+    const leaves = [
+      null,
+      0,
+      -1,
+      1.5,
+      3,
+      9,
+      '',
+      'black',
+      'white',
+      'pawn',
+      'marshal',
+      'lancer',
+      true,
+      false,
+    ];
+    if (depth <= 0 || rand() < 0.3) return pick(leaves);
+    const size = Math.floor(rand() * 4);
+    if (rand() < 0.5) return Array.from({ length: size }, () => randomValue(rand, depth - 1));
+    const keys = ['square', 'pieces', 'kind', 'owner', 'file', 'rank', 'black', 'white', 'pawn'];
+    return Object.fromEntries(
+      Array.from({ length: size }, () => [pick(keys), randomValue(rand, depth - 1)]),
+    );
+  }
+
+  /** A setup that is valid except for one randomly corrupted part. */
+  function mutatedSetup(rand: () => number): unknown {
+    const base: Record<string, unknown> = {
+      stacks: [...KINGS, at(4, 4, W('pawn'), B('samurai'))],
+      hands: { black: { pawn: 2 }, white: { general: 1 } },
+      turn: 'white',
+      quietPlies: 3,
+    };
+    const field = ['stacks', 'hands', 'turn', 'quietPlies'][Math.floor(rand() * 4)]!;
+    const stacks = base.stacks as unknown[];
+    const roll = rand();
+    if (field === 'stacks' && roll < 0.5) {
+      stacks[Math.floor(rand() * stacks.length)] = randomValue(rand, 3);
+    } else if (field === 'hands' && roll < 0.5) {
+      base.hands = { black: randomValue(rand, 2), white: { pawn: 1 } };
+    } else {
+      base[field] = randomValue(rand, 3);
+    }
+    return base;
+  }
+
+  it.each([1, 2, 3, 4, 5])('seed %i: never throws on random malformed setups', (seed) => {
+    const rand = rng(seed);
+    const codes = new Set<unknown>([null, ...Object.values(PositionError)]);
+    for (let i = 0; i < 500; i++) {
+      const input = i % 2 === 0 ? randomValue(rand, 4) : mutatedSetup(rand);
+      let result: unknown;
+      expect(() => (result = check(input))).not.toThrow();
+      expect(codes.has(result)).toBe(true);
+      // The throwing constructor agrees and only ever throws its own error type.
+      if (result === null) expect(() => createPosition(input as PositionSetup)).not.toThrow();
+      else expect(() => createPosition(input as PositionSetup)).toThrow(InvalidPositionError);
+    }
   });
 });
