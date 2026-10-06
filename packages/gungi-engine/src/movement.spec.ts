@@ -60,9 +60,74 @@ const ray = ([df, dr]: Offset, n: number): Offset[] =>
 const steps = (dirs: Offset[], n: number): Offset[] => dirs.flatMap((d) => ray(d, n));
 /** Slides from the centre reach 4 squares in every direction on an empty board. */
 const slides = (dirs: Offset[]): Offset[] => steps(dirs, 4);
-/** Jump landings (df, dr), (df, dr + 1), ... for `tier` squares, kept on the board from the centre. */
-const jumps = (df: number, dr: number, tier: number): Offset[] =>
-  Array.from({ length: tier }, (_, k): Offset => [df, dr + k]).filter(([, r]) => r <= 4);
+/**
+ * §5.4 jump rays, nearest square first. The first `start` squares are only
+ * passed over; the following ones are the landings at tier 1, 2, 3.
+ */
+interface Ray {
+  readonly squares: readonly Offset[];
+  readonly start: number;
+}
+const JUMP_RAYS: Partial<Record<PieceKind, readonly Ray[]>> = {
+  archer: [
+    {
+      squares: [
+        [-1, 1],
+        [-1, 2],
+        [-2, 3],
+        [-3, 4],
+      ],
+      start: 1,
+    },
+    {
+      squares: [
+        [0, 1],
+        [0, 2],
+        [0, 3],
+        [0, 4],
+      ],
+      start: 1,
+    },
+    {
+      squares: [
+        [1, 1],
+        [1, 2],
+        [2, 3],
+        [3, 4],
+      ],
+      start: 1,
+    },
+  ],
+  cannon: [
+    {
+      squares: [
+        [0, 1],
+        [0, 2],
+        [0, 3],
+        [0, 4],
+        [0, 5],
+      ],
+      start: 2,
+    },
+  ],
+  musket: [
+    {
+      squares: [
+        [0, 1],
+        [0, 2],
+        [0, 3],
+        [0, 4],
+      ],
+      start: 1,
+    },
+  ],
+};
+/** Landings of `ray` at `tier`, kept to `maxDr` ranks ahead. */
+const landings = (ray: Ray, tier: number, maxDr = 4): Offset[] =>
+  ray.squares.slice(ray.start, ray.start + tier).filter(([, r]) => r <= maxDr);
+/** All jump landings of `kind` at `tier` from the centre of an empty board. */
+const jumps = (kind: PieceKind, tier: number): Offset[] =>
+  (JUMP_RAYS[kind] ?? []).flatMap((ray) => landings(ray, tier));
 
 /** §5.3 / §5.2 expected reach from the centre of an empty board at tier t. */
 const TABLE: Record<PieceKind, (t: number) => Offset[]> = {
@@ -76,9 +141,9 @@ const TABLE: Record<PieceKind, (t: number) => Offset[]> = {
   shinobi: (t) => steps(DIAG, t + 1),
   fortress: (t) => steps([F, L, R, BL, BR], t),
   pawn: (t) => steps([F, B], t),
-  cannon: (t) => [...jumps(0, 3, t), ...steps([L, R, B], t)],
-  archer: (t) => [...jumps(-1, 2, t), ...jumps(0, 2, t), ...jumps(1, 2, t), ...steps([B], t)],
-  musket: (t) => [...jumps(0, 2, t), ...steps([BL, BR], t)],
+  cannon: (t) => [...jumps('cannon', t), ...steps([L, R, B], t)],
+  archer: (t) => [...jumps('archer', t), ...steps([B], t)],
+  musket: (t) => [...jumps('musket', t), ...steps([BL, BR], t)],
   tactician: (t) => steps([FL, FR, B], t),
 };
 
@@ -109,7 +174,10 @@ describe('§5.3 movement table shape', () => {
       const jumps = MOVE_RULES[kind].filter((r) => r.kind === 'jump');
       const jumpers: PieceKind[] = ['cannon', 'archer', 'musket'];
       expect(jumps.length > 0).toBe(jumpers.includes(kind));
-      for (const r of jumps) if (r.kind === 'jump') expect(r.offset[1]).toBeGreaterThan(0);
+      for (const r of jumps) {
+        if (r.kind !== 'jump') continue;
+        for (const [, dr] of [...r.over, r.land, r.extend]) expect(dr).toBeGreaterThan(0);
+      }
     }
   });
 
@@ -145,9 +213,28 @@ describe('§5.2 tier extension examples', () => {
     );
   });
 
-  it('a tier-2 archer reaches two ranks of three squares ahead', () => {
+  it('a tier-2 archer fans out: its diagonal landings move one file further out', () => {
     expect(reach('archer', 2)).toEqual(
-      offsets([-1, 2], [0, 2], [1, 2], [-1, 3], [0, 3], [1, 3], [0, -1], [0, -2]),
+      offsets([-1, 2], [0, 2], [1, 2], [-2, 3], [0, 3], [2, 3], [0, -1], [0, -2]),
+    );
+  });
+
+  it('a tier-3 archer adds (-3,+4), (0,+4), (+3,+4) and a third backward step', () => {
+    expect(reach('archer', 3)).toEqual(
+      offsets(
+        [-1, 2],
+        [0, 2],
+        [1, 2],
+        [-2, 3],
+        [0, 3],
+        [2, 3],
+        [-3, 4],
+        [0, 4],
+        [3, 4],
+        [0, -1],
+        [0, -2],
+        [0, -3],
+      ),
     );
   });
 
@@ -227,91 +314,126 @@ describe('§5.4 jump height limit', () => {
   /** A stack of `height` white pawns. */
   const tower = (height: number): Piece[] =>
     Array.from({ length: height }, () => ({ kind: 'pawn', owner: 'white' }));
+  /** Origin from which every tier-3 landing (up to 5 ranks ahead) is on the board. */
+  const ORIGIN: Record<PlayerSide, Square> = {
+    black: { file: 4, rank: 3 },
+    white: { file: 4, rank: 5 },
+  };
   const wall =
     (owner: PlayerSide, height: number, ...cells: Offset[]) =>
     (b: Board) =>
-      cells.reduce((acc, [df, dr]) => putRelative(owner, df, dr, tower(height))(acc), b);
-
-  it.each(SIDES)('a jump passes over pieces no higher than the mover (%s)', (owner) => {
-    expect(reach('cannon', 1, owner, wall(owner, 1, [0, 1], [0, 2]))).toContain('0,3');
-    expect(reach('musket', 1, owner, wall(owner, 1, [0, 1]))).toContain('0,2');
-    expect(reach('archer', 1, owner, wall(owner, 1, [0, 1]))).toEqual(
-      offsets([-1, 2], [0, 2], [1, 2], [0, -1]),
-    );
-  });
-
-  it.each(SIDES)('a tier-1 jumper cannot pass over a 2-high stack (%s)', (owner) => {
-    expect(reach('cannon', 1, owner, wall(owner, 2, [0, 2]))).not.toContain('0,3');
-    expect(reach('musket', 1, owner, wall(owner, 2, [0, 1]))).not.toContain('0,2');
-    expect(reach('archer', 1, owner, wall(owner, 2, [0, 1]))).toEqual(offsets([0, -1]));
-  });
-
-  it('a tier-2 archer passes over a 2-high stack but not a 3-high one', () => {
-    expect(reach('archer', 2, 'black', wall('black', 2, [0, 1]))).toContain('0,2');
-    expect(reach('archer', 2, 'black', wall('black', 3, [0, 1]))).toEqual(
-      offsets([0, -1], [0, -2]),
-    );
-  });
-
-  it('a tier-3 jumper passes over anything', () => {
-    expect(reach('cannon', 3, 'black', wall('black', 3, [0, 1], [0, 2]))).toContain('0,3');
-  });
-
-  it('an extended landing also passes over the shorter landing square', () => {
-    // Tier-2 cannon: (0,3) passes (0,1),(0,2); (0,4) also passes (0,3).
-    const r = reach('cannon', 2, 'black', wall('black', 3, [0, 3]));
-    expect(r).toContain('0,3');
-    expect(r).not.toContain('0,4');
-  });
-
-  it.each(SIDES)(
-    'R-2 a tall stack straight ahead blocks all three archer landings (%s)',
-    (owner) => {
-      expect(reach('archer', 1, owner, wall(owner, 3, [0, 1]))).toEqual(offsets([0, -1]));
-    },
-  );
-
-  it.each(SIDES)('R-2 tall stacks on the front diagonals block no archer landing (%s)', (owner) => {
-    const r = reach('archer', 1, owner, wall(owner, 3, [-1, 1], [1, 1]));
-    expect(r).toEqual(offsets([-1, 2], [0, 2], [1, 2], [0, -1]));
-  });
-
-  it.each(SIDES)('R-2 review diagram: own pawns ahead and front-right (%s)', (owner) => {
-    const pawn: Piece = { kind: 'pawn', owner };
-    const setup = (b: Board) =>
-      putRelative(owner, 1, 1, [pawn])(putRelative(owner, 0, 1, [pawn])(b));
-    expect(reach('archer', 1, owner, setup)).toEqual(offsets([-1, 2], [0, 2], [1, 2], [0, -1]));
-  });
-
-  it.each(SIDES)(
-    'a tier-2 archer reaches the third rank only over the two squares straight ahead (%s)',
-    (owner) => {
-      const second = reach('archer', 2, owner, wall(owner, 3, [0, 2]));
-      expect(second).toEqual(offsets([-1, 2], [0, 2], [1, 2], [0, -1], [0, -2]));
-      const diagonals = reach('archer', 2, owner, wall(owner, 3, [-1, 1], [1, 1], [-1, 2], [1, 2]));
-      expect(diagonals).toEqual(
-        offsets([-1, 2], [0, 2], [1, 2], [-1, 3], [0, 3], [1, 3], [0, -1], [0, -2]),
+      cells.reduce(
+        (acc, [df, dr]) => putRelative(owner, df, dr, tower(height), ORIGIN[owner])(acc),
+        b,
       );
-    },
-  );
+  /** Reachable squares ahead of the mover (the jump landings of the three jumpers). */
+  const ahead = (
+    kind: PieceKind,
+    tier: number,
+    owner: PlayerSide,
+    setup: (b: Board) => Board,
+  ): string[] =>
+    reach(kind, tier, owner, setup, ORIGIN[owner]).filter((o) => Number(o.split(',')[1]) > 0);
+  const raysOf = (kind: PieceKind): readonly Ray[] => JUMP_RAYS[kind] ?? [];
+  /** Squares a tier-`tier` jump passes over on `ray`: everything before its last landing. */
+  const passed = (ray: Ray, tier: number): Offset[] => ray.squares.slice(0, ray.start + tier - 1);
+  const JUMPERS: PieceKind[] = ['cannon', 'archer', 'musket'];
 
-  it.each(SIDES)('a tier-2 musket reaches (0,+3) over (0,+1) and (0,+2) (%s)', (owner) => {
-    expect(reach('musket', 2, owner, wall(owner, 3, [0, 2]))).toEqual(
-      offsets([0, 2], [-1, -1], [1, -1], [-2, -2], [2, -2]),
+  for (const kind of JUMPERS) {
+    for (const tier of [1, 2, 3]) {
+      it.each(SIDES)(
+        `${kind} tier ${tier}: stacks no higher than the tier on every passed square are jumped over (%s)`,
+        (owner) => {
+          const cells = raysOf(kind).flatMap((ray) => passed(ray, tier));
+          const all = raysOf(kind).flatMap((ray) => landings(ray, tier, 5));
+          expect(ahead(kind, tier, owner, wall(owner, tier, ...cells))).toEqual(offsets(...all));
+        },
+      );
+    }
+    for (const tier of [1, 2]) {
+      it.each(SIDES)(
+        `${kind} tier ${tier}: a higher stack on any passed square closes its ray from there on (%s)`,
+        (owner) => {
+          raysOf(kind).forEach((blocked, i) => {
+            passed(blocked, tier).forEach((cell, j) => {
+              const expected = raysOf(kind).flatMap((ray, k) =>
+                k === i ? ray.squares.slice(ray.start, j + 1) : landings(ray, tier, 5),
+              );
+              expect(ahead(kind, tier, owner, wall(owner, tier + 1, cell))).toEqual(
+                offsets(...expected),
+              );
+            });
+          });
+        },
+      );
+    }
+  }
+
+  it.each(SIDES)('a tier-3 jumper passes over anything (%s)', (owner) => {
+    expect(ahead('cannon', 3, owner, wall(owner, 3, [0, 1], [0, 2], [0, 3], [0, 4]))).toEqual(
+      offsets([0, 3], [0, 4], [0, 5]),
     );
+  });
+
+  describe('R-2 official 弓 figures', () => {
+    it.each(SIDES)(
+      'figure 1: a higher stack on (+1,+1) closes the whole right-diagonal ray (%s)',
+      (owner) => {
+        expect(ahead('archer', 1, owner, wall(owner, 2, [1, 1]))).toEqual(offsets([-1, 2], [0, 2]));
+        expect(ahead('archer', 2, owner, wall(owner, 3, [1, 1]))).toEqual(
+          offsets([-1, 2], [0, 2], [-2, 3], [0, 3]),
+        );
+      },
+    );
+
+    it.each(SIDES)(
+      'figure 2: a higher stack on (+1,+2) stays a landing but closes (+2,+3) (%s)',
+      (owner) => {
+        expect(ahead('archer', 2, owner, wall(owner, 3, [1, 2]))).toEqual(
+          offsets([-1, 2], [0, 2], [1, 2], [-2, 3], [0, 3]),
+        );
+      },
+    );
+
+    it.each(SIDES)(
+      'figure 1 mirrored: a higher stack on (-1,+1) closes the left ray (%s)',
+      (owner) => {
+        expect(ahead('archer', 2, owner, wall(owner, 3, [-1, 1]))).toEqual(
+          offsets([0, 2], [1, 2], [0, 3], [2, 3]),
+        );
+      },
+    );
+
+    it.each(SIDES)('a higher stack straight ahead closes only the straight ray (%s)', (owner) => {
+      expect(ahead('archer', 1, owner, wall(owner, 2, [0, 1]))).toEqual(offsets([-1, 2], [1, 2]));
+    });
+
+    it.each(SIDES)('PR #2 review diagram: own pawns ahead and front-right (%s)', (owner) => {
+      const pawn: Piece = { kind: 'pawn', owner };
+      const setup = (b: Board) =>
+        putRelative(owner, 1, 1, [pawn])(putRelative(owner, 0, 1, [pawn])(b));
+      expect(reach('archer', 1, owner, setup)).toEqual(offsets([-1, 2], [0, 2], [1, 2], [0, -1]));
+    });
   });
 
   it('the landing square itself may hold a stack of any height', () => {
-    expect(reach('musket', 1, 'black', wall('black', 3, [0, 2]))).toContain('0,2');
+    expect(ahead('musket', 1, 'black', wall('black', 3, [0, 2]))).toEqual(offsets([0, 2]));
+    expect(ahead('archer', 1, 'black', wall('black', 3, [1, 2]))).toContain('1,2');
   });
 
-  it('pieces passed over are irrelevant to the backward step', () => {
-    const r = reach('musket', 1, 'black', wall('black', 3, [0, 1]));
-    expect(r).toEqual(offsets([-1, -1], [1, -1]));
+  it('pieces passed over are irrelevant to the backward steps', () => {
+    expect(reach('musket', 1, 'black', wall('black', 3, [0, 1]), ORIGIN.black)).toEqual(
+      offsets([-1, -1], [1, -1]),
+    );
+    expect(
+      reach('archer', 1, 'black', wall('black', 3, [-1, 1], [0, 1], [1, 1]), ORIGIN.black),
+    ).toEqual(offsets([0, -1]));
   });
 
   it('non-jumping pieces never pass over a piece, even a low one at a high tier', () => {
-    expect(reach('lancer', 3, 'black', wall('black', 1, [0, 1]))).not.toContain('0,2');
+    expect(reach('lancer', 3, 'black', wall('black', 1, [0, 1]), ORIGIN.black)).not.toContain(
+      '0,2',
+    );
   });
 });
 
@@ -321,7 +443,7 @@ describe('§5 board edges', () => {
       offsets([0, 1], [1, 0], [1, 1]),
     );
     expect(reach('archer', 3, 'white', (b) => b, { file: 8, rank: 8 })).toEqual(
-      offsets([0, 2], [0, 3], [0, 4], [1, 2], [1, 3], [1, 4]),
+      offsets([0, 2], [0, 3], [0, 4], [1, 2], [2, 3], [3, 4]),
     );
   });
 
