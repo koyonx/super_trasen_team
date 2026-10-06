@@ -38,8 +38,8 @@ describe('§9.1 initial state', () => {
     const s = createInitialState();
     expect(s.phase).toBe('placement');
     expect(s.turn).toBe('black');
-    expect(handTotal(s.hands.black)).toBe(38);
-    expect(handTotal(s.hands.white)).toBe(38);
+    expect(handTotal(s.hands.black)).toBe(25);
+    expect(handTotal(s.hands.white)).toBe(25);
     expect(s.board.flat().every((st) => st.length === 0)).toBe(true);
     expect(s.placementDone).toEqual({ black: false, white: false });
     expect(s.result).toBeNull();
@@ -99,7 +99,7 @@ describe('§9.2 place', () => {
     expect(
       errorOf(createInitialState(), {
         ...place('black', 'marshal', 4, 0),
-        kind: 'lancer' as PieceKind,
+        kind: 'spear' as PieceKind,
       }),
     ).toBe(MoveError.INVALID_MOVE);
   });
@@ -107,12 +107,12 @@ describe('§9.2 place', () => {
   it('§4.1 allows stacking on own pieces up to 3 tiers', () => {
     const s = run(
       withMarshals(),
-      place('black', 'general', 0, 0),
-      place('white', 'general', 0, 8),
-      place('black', 'general', 0, 0),
-      place('white', 'general', 0, 8),
-      place('black', 'general', 0, 0),
-      place('white', 'general', 0, 8),
+      place('black', 'pawn', 0, 0),
+      place('white', 'pawn', 0, 8),
+      place('black', 'pawn', 0, 0),
+      place('white', 'pawn', 0, 8),
+      place('black', 'pawn', 0, 0),
+      place('white', 'pawn', 0, 8),
     );
     expect(getStack(s.board, { file: 0, rank: 0 })).toHaveLength(3);
     expect(errorOf(s, place('black', 'samurai', 0, 0))).toBe(MoveError.STACK_FULL);
@@ -181,8 +181,8 @@ describe('§9.3 finishPlacement', () => {
     expect(s.phase).toBe('play');
     expect(s.turn).toBe('white');
     expect(s.placementDone).toEqual({ black: true, white: true });
-    expect(s.hands.black.pawn).toBe(8);
-    expect(s.hands.white.pawn).toBe(9);
+    expect(s.hands.black.pawn).toBe(3);
+    expect(s.hands.white.pawn).toBe(4);
   });
 
   it('is never declared automatically', () => {

@@ -55,7 +55,7 @@ describe('§8.1 drop basics', () => {
 
   it('rejects malformed input, wrong turn and wrong phase', () => {
     expect(validateDrop(base(), drop('pawn', 2, 9))).toBe(MoveError.INVALID_SQUARE);
-    expect(validateDrop(base(), drop('lancer' as PieceKind, 2, 2))).toBe(MoveError.INVALID_MOVE);
+    expect(validateDrop(base(), drop('spear' as PieceKind, 2, 2))).toBe(MoveError.INVALID_MOVE);
     expect(validateDrop(base(), drop('pawn', 2, 6, 'white'))).toBe(MoveError.NOT_YOUR_TURN);
     expect(validateDrop({ ...base(), phase: 'placement' }, drop('pawn', 2, 2))).toBe(
       MoveError.WRONG_PHASE,
@@ -110,7 +110,7 @@ describe('§8.3 drop targets', () => {
       stacks: [
         at(4, 0, B('marshal')),
         at(4, 8, W('marshal')),
-        at(0, 4, W('pawn'), B('general'), W('general')),
+        at(0, 4, W('pawn'), B('samurai'), W('samurai')),
       ],
       hands: { black: { general: 1 } },
     });

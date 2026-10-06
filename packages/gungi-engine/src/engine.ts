@@ -68,7 +68,7 @@ function finish(state: GameState, result: GameResult): GameState {
   return { ...state, phase: 'finished', result };
 }
 
-/** §11.1 whether the move takes the enemy marshal (only a top piece can be captured, §6.4). */
+/** §11.1 whether the move takes the enemy marshal (always a top piece, §4.4). */
 function capturesMarshal(state: GameState, move: GameMove): boolean {
   return move.type === 'capture' && topPiece(getStack(state.board, move.to))?.kind === 'marshal';
 }

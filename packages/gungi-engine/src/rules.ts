@@ -40,7 +40,8 @@ export function validateBoardMove(state: GameState, move: BoardMove): MoveError 
   if (move.player !== state.turn) return MoveError.NOT_YOUR_TURN;
   if (!isValidSquare(move.from) || !isValidSquare(move.to)) return MoveError.INVALID_SQUARE;
 
-  const piece = topPiece(getStack(state.board, move.from));
+  const origin = getStack(state.board, move.from);
+  const piece = topPiece(origin);
   if (!piece) return MoveError.NO_PIECE;
   if (piece.owner !== move.player) return MoveError.NOT_YOUR_PIECE;
   if (sameSquare(move.from, move.to) || !canReach(state.board, move.from, move.to)) {
@@ -51,10 +52,10 @@ export function validateBoardMove(state: GameState, move: BoardMove): MoveError 
   const top = topPiece(target);
   if (move.type === 'move') return top ? MoveError.TARGET_NOT_EMPTY : null;
   if (!top) return MoveError.TARGET_EMPTY;
-  // §6.2 there is no height condition for captures or stacks.
-  if (move.type === 'capture')
-    return top.owner === move.player ? MoveError.CANNOT_CAPTURE_OWN : null;
-  return stackError(target);
+  if (move.type === 'capture' && top.owner === move.player) return MoveError.CANNOT_CAPTURE_OWN;
+  // §6.2 only stacks no higher than the mover's tier can be taken or stacked on.
+  if (target.length > origin.length) return MoveError.TARGET_TOO_HIGH;
+  return move.type === 'capture' ? null : stackError(target);
 }
 
 /** Applies a pseudo-legal board move. Caller must have validated it. */
@@ -75,21 +76,26 @@ export function executeBoardMove(state: GameState, move: BoardMove): GameState {
   const lift = (board: Board): Board => setStack(board, move.from, origin.slice(0, -1));
 
   if (move.type === 'capture') {
-    // §6.4 only the top piece is taken and the capturer always moves onto
-    // whatever remains (R-8). Legal-move filtering goes through this same
-    // function, so the simulated and the applied capture never differ.
-    const victim = topPiece(target);
-    if (!victim) throw new Error('executeBoardMove: nothing to capture');
-    const remaining = target.slice(0, -1);
-    // Unreachable from a valid position: a marshal is always a top piece, so
-    // it never sits right under the victim (§4.4), and taking one piece off
-    // a stack of at most 3 leaves room for the capturer (§4.1).
-    if (topPiece(remaining)?.kind === 'marshal' || !hasRoom(remaining)) {
+    // §6.4 every enemy piece in the stack is removed; own pieces stay below
+    // in their order and the capturer lands on top of them.
+    const victims = target.filter((p) => p.owner !== move.player);
+    const remaining = target.filter((p) => p.owner === move.player);
+    // Unreachable from a valid position: the top is an enemy piece, so at most
+    // 2 own pieces remain (§4.1), and an own marshal is never below another
+    // piece (§4.4).
+    if (
+      victims.length === 0 ||
+      !hasRoom(remaining) ||
+      remaining.some((p) => p.kind === 'marshal')
+    ) {
       throw new Error('executeBoardMove: corrupt target stack');
     }
     return {
       ...advance(setStack(lift(state.board), move.to, [...remaining, piece])),
-      captured: { ...state.captured, [move.player]: [...state.captured[move.player], victim.kind] },
+      captured: {
+        ...state.captured,
+        [move.player]: [...state.captured[move.player], ...victims.map((p) => p.kind)],
+      },
     };
   }
 
@@ -111,6 +117,7 @@ export function boardMoves(state: GameState, side: PlayerSide): BoardMove[] {
         moves.push({ type: 'move', player: side, from, to });
         continue;
       }
+      if (target.length > origin.length) continue;
       if (stackError(target) === null) moves.push({ type: 'stack', player: side, from, to });
       if (top.owner !== side) moves.push({ type: 'capture', player: side, from, to });
     }
@@ -118,12 +125,13 @@ export function boardMoves(state: GameState, side: PlayerSide): BoardMove[] {
   return moves;
 }
 
-/** Whether any top piece of `attacker` can reach `target` (§10.1). */
+/** Whether any top piece of `attacker` could capture on `target` (§6.2, §10.1). */
 export function isSquareAttacked(board: Board, target: Square, attacker: PlayerSide): boolean {
+  const targetHeight = getStack(board, target).length;
   for (const from of allSquares()) {
     const origin = getStack(board, from);
     const piece = topPiece(origin);
-    if (!piece || piece.owner !== attacker) continue;
+    if (!piece || piece.owner !== attacker || targetHeight > origin.length) continue;
     if (reachableSquares(board, from, piece, origin.length).some((sq) => sameSquare(sq, target))) {
       return true;
     }
@@ -131,7 +139,7 @@ export function isSquareAttacked(board: Board, target: Square, attacker: PlayerS
   return false;
 }
 
-/** §10.1 whether `side`'s marshal is within reach of an opponent's top piece. */
+/** §10.1 whether `side`'s marshal could be captured by the opponent's next move. */
 export function isInCheck(board: Board, side: PlayerSide): boolean {
   const marshal = findMarshal(board, side);
   return marshal !== undefined && isSquareAttacked(board, marshal, opponent(side));

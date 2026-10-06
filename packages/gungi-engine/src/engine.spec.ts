@@ -10,7 +10,6 @@ import {
 } from './engine';
 import { handTotal, opponent } from './pieces';
 import { createPosition, positionKey, stateError } from './position';
-import { isInCheck } from './rules';
 import { createInitialState } from './setup';
 import { B, W, at, rng, sq } from './test-helpers';
 import type { BoardMove, GameState, Move, PieceKind, PlayerSide } from './types';
@@ -23,11 +22,9 @@ const mv = (
   player: PlayerSide = 'black',
 ): BoardMove => ({ type, player, from: sq(...from), to: sq(...to) });
 
-/** A tier-3 cannon tower: slides orthogonally to the board edge (§5.3.10). */
-const rook = (file: number, rank: number, side: PlayerSide) => {
-  const P = side === 'black' ? B : W;
-  return at(file, rank, P('general'), P('general'), P('cannon'));
-};
+/** The general: slides orthogonally to the board edge at any tier (§5.3.2). */
+const rook = (file: number, rank: number, side: PlayerSide) =>
+  at(file, rank, (side === 'black' ? B : W)('general'));
 
 function play(state: GameState, ...moves: Move[]): GameState {
   return moves.reduce((s, m) => {
@@ -50,7 +47,7 @@ describe('§10.1 self-check is rejected', () => {
     const s = createPosition({
       stacks: [
         at(4, 0, B('marshal')),
-        at(4, 1, B('general')),
+        at(4, 1, B('samurai')),
         rook(4, 8, 'white'),
         at(0, 8, W('marshal')),
       ],
@@ -96,18 +93,17 @@ describe('§10.1 self-check is rejected', () => {
 });
 
 /**
- * R-8: legality is judged on the board the capture really produces, where the
- * capturer always lands on the remaining stack (§6.4). gungi.js 1.0.20
- * `moves()` judges these on a board where the capturer stays put while the
- * square is not emptied; the verdict of each case below differs from it.
+ * §10.1 legality is judged on the board the capture really produces: every
+ * enemy piece of the target leaves and the capturer lands on what is left
+ * (§6.4).
  */
-describe('R-8 §10.1 self-check under §6.4 capture-advance', () => {
-  it('a pinned piece may not capture onto a remaining stack off the line', () => {
+describe('§10.1 self-check under §6.4 whole-stack capture', () => {
+  it('a pinned piece may not capture off the line', () => {
     const s = createPosition({
       stacks: [
         at(4, 0, B('marshal')),
-        at(4, 1, B('general')),
-        at(5, 2, W('pawn'), W('samurai')),
+        at(4, 1, B('samurai')),
+        at(5, 2, W('samurai')),
         rook(4, 8, 'white'),
         at(0, 8, W('marshal')),
       ],
@@ -118,27 +114,26 @@ describe('R-8 §10.1 self-check under §6.4 capture-advance', () => {
     expect(validateMove(s, mv('move', [4, 1], [4, 2]))).toBeNull();
   });
 
-  it('a marshal may not capture onto a remaining stack that is attacked', () => {
+  it('a marshal may not capture onto a square the enemy still attacks', () => {
     const s = createPosition({
       stacks: [
         at(4, 0, B('marshal')),
-        at(4, 1, B('pawn'), W('samurai')),
+        at(4, 1, W('samurai')),
         rook(8, 1, 'white'),
         at(8, 8, W('marshal')),
       ],
     });
-    expect(inCheck(s)).toBe(false);
+    expect(inCheck(s)).toBe(true);
     const capture = mv('capture', [4, 0], [4, 1]);
     expect(validateMove(s, capture)).toBe(MoveError.SELF_CHECK);
     expect(legalMoves(s)).not.toContainEqual(capture);
   });
 
-  it('a marshal may escape check by capturing onto a remaining stack', () => {
+  it('a raised marshal may escape check by taking a whole 2-high stack', () => {
     const s = createPosition({
       stacks: [
-        at(4, 0, B('marshal')),
+        at(4, 0, B('pawn'), B('marshal')),
         at(4, 1, W('pawn'), W('samurai')),
-        rook(8, 0, 'white'),
         at(8, 8, W('marshal')),
       ],
     });
@@ -146,31 +141,18 @@ describe('R-8 §10.1 self-check under §6.4 capture-advance', () => {
     const capture = mv('capture', [4, 0], [4, 1]);
     expect(legalMoves(s)).toContainEqual(capture);
     const next = play(s, capture);
-    expect(getStack(next.board, sq(4, 1))).toEqual([W('pawn'), B('marshal')]);
+    expect(getStack(next.board, sq(4, 1))).toEqual([B('marshal')]);
+    expect(getStack(next.board, sq(4, 0))).toEqual([B('pawn')]);
+    expect(next.captured.black).toEqual(['pawn', 'samurai']);
     expect(next.phase).toBe('play');
   });
 
-  it('a capturer that covers a remaining enemy piece removes its attack', () => {
-    // Taking the tier-2 samurai uncovers a white general next to the marshal.
+  it('§6.2 a tier-1 marshal cannot escape by taking a 2-high stack', () => {
     const s = createPosition({
-      stacks: [
-        at(4, 0, B('marshal')),
-        at(3, 0, B('general')),
-        at(4, 1, W('general'), W('samurai')),
-        at(8, 8, W('marshal')),
-      ],
+      stacks: [at(4, 0, B('marshal')), at(4, 1, W('lancer'), W('samurai')), at(8, 8, W('marshal'))],
     });
-    expect(inCheck(s)).toBe(false);
-    const capture = mv('capture', [3, 0], [4, 1]);
-    // gungi.js moves(): the capturer stays on (3, 0), the general attacks (4, 0).
-    const stayPut = setStack(s.board, sq(4, 1), [W('general')]);
-    expect(isInCheck(stayPut, 'black')).toBe(true);
-    // Here the capturer lands on the general, which then has no reach (§4.2).
-    expect(validateMove(s, capture)).toBeNull();
-    expect(legalMoves(s)).toContainEqual(capture);
-    const next = play(s, capture);
-    expect(getStack(next.board, sq(4, 1))).toEqual([W('general'), B('general')]);
-    expect(inCheck({ ...next, turn: 'black' })).toBe(false);
+    expect(inCheck(s)).toBe(true);
+    expect(validateMove(s, mv('capture', [4, 0], [4, 1]))).toBe(MoveError.TARGET_TOO_HIGH);
   });
 });
 
@@ -179,7 +161,11 @@ describe('§11.1 marshal capture', () => {
   // in check (a tier-3 cannon on file 4) and white moves first (§9.4).
   const opening = (...black: PieceKind[]) =>
     createPosition({
-      stacks: [at(8, 8, W('marshal')), rook(4, 6, 'white'), at(4, 2, ...black.map(B))],
+      stacks: [
+        at(8, 8, W('marshal')),
+        at(4, 6, W('pawn'), W('general')),
+        at(4, 2, ...black.map(B)),
+      ],
       turn: 'white',
     });
 
@@ -191,25 +177,25 @@ describe('§11.1 marshal capture', () => {
     expect(next.captured.white).toContain('marshal');
   });
 
-  it('a marshal on top of a stack is captured and the capturer lands below', () => {
+  it('a marshal on top of a stack is captured together with the pieces below', () => {
     const next = play(opening('pawn', 'marshal'), mv('capture', [4, 6], [4, 2], 'white'));
-    expect(getStack(next.board, sq(4, 2))).toEqual([B('pawn'), W('cannon')]);
+    expect(getStack(next.board, sq(4, 2))).toEqual([W('general')]);
     expect(next.result).toEqual({ winner: 'white', reason: 'marshalCaptured' });
   });
 });
 
 /**
- * Black marshal in the corner. White stacks a cannon onto a 2-high stack on
- * file 0 (becoming a tier-3 slider) while another tier-3 cannon holds file 1.
+ * Black marshal in the corner. The lieutenant covers (1, 0), a tier-3 cannon
+ * jumps onto (1, 1) and the general slides onto file 0 to give check.
  */
 const MATE_NET = [
   at(0, 0, B('marshal')),
-  at(0, 5, W('general'), W('general')),
-  rook(2, 5, 'white'),
-  rook(1, 7, 'white'),
+  at(7, 6, W('lieutenant')),
+  at(1, 6, W('pawn'), W('pawn'), W('cannon')),
+  rook(5, 5, 'white'),
   at(8, 8, W('marshal')),
 ];
-const MATING_MOVE = mv('stack', [2, 5], [0, 5], 'white');
+const MATING_MOVE = mv('move', [5, 5], [0, 5], 'white');
 
 describe('§11.2 checkmate', () => {
   it('detects mate after the mating move', () => {
@@ -230,59 +216,30 @@ describe('§11.2 checkmate', () => {
       kind: 'pawn',
       to: sq(0, rank),
     });
-    expect(legalMoves(next)).toEqual([drop(1), drop(2), drop(3), drop(4)]);
-  });
-
-  it('§8.4 an own pawn on the file does not stop a blocking pawn drop', () => {
-    const s = createPosition({
-      stacks: [...MATE_NET, at(0, 7, B('pawn'))],
-      hands: { black: { pawn: 1 } },
-      turn: 'white',
-    });
-    const next = play(s, MATING_MOVE);
-    expect(next.result).toBeNull();
-  });
-
-  it('§8.4 a pawn drop may deliver mate', () => {
-    // Full stacks wall the marshal in; none of their tops reaches (0, 8).
-    const s = createPosition({
-      stacks: [
-        at(0, 7, B('marshal')),
-        at(0, 6, B('general'), B('general'), B('pawn')),
-        at(1, 6, B('general'), B('general'), B('major')),
-        at(1, 7, B('general'), B('general'), B('musket')),
-        at(1, 8, B('lieutenant'), B('lieutenant'), B('pawn')),
-        at(2, 6, W('general'), W('samurai')),
-        at(8, 0, W('marshal')),
-      ],
-      hands: { white: { pawn: 1 } },
-      turn: 'white',
-    });
-    expect(inCheck({ ...s, turn: 'black' })).toBe(false);
-    const next = play(s, { type: 'drop', player: 'white', kind: 'pawn', to: sq(0, 8) });
-    expect(next.result).toEqual({ winner: 'white', reason: 'checkmate' });
+    expect(legalMoves(next)).toEqual([drop(1), drop(2), drop(3), drop(4), drop(5)]);
   });
 });
 
 describe('§11.3 stalemate', () => {
+  /** (0, 1) and (1, 1) on the general's rank, (1, 0) on the lieutenant's diagonal. */
   const STUCK = [
     at(0, 0, B('marshal')),
-    rook(1, 5, 'white'),
-    rook(8, 1, 'white'),
+    rook(5, 1, 'white'),
+    at(7, 6, W('lieutenant')),
     at(5, 5, W('pawn')),
     at(8, 8, W('marshal')),
   ];
 
   it('a side with no legal move and not in check draws', () => {
     const s = createPosition({ stacks: STUCK, turn: 'white' });
-    const next = play(s, mv('move', [5, 5], [5, 4], 'white'));
+    const next = play(s, mv('move', [8, 8], [8, 7], 'white'));
     expect(inCheck(next)).toBe(false);
     expect(next.result).toEqual({ winner: null, reason: 'stalemate' });
   });
 
   it('a hand piece that can be dropped avoids stalemate', () => {
     const s = createPosition({ stacks: STUCK, hands: { black: { general: 1 } }, turn: 'white' });
-    expect(play(s, mv('move', [5, 5], [5, 4], 'white')).result).toBeNull();
+    expect(play(s, mv('move', [8, 8], [8, 7], 'white')).result).toBeNull();
   });
 });
 
@@ -455,7 +412,7 @@ describe('§12.2 malformed input', () => {
     }
   });
 
-  const badKinds: unknown[] = [undefined, null, 42, 'lancer', 'Pawn', 'toString', '__proto__', {}];
+  const badKinds: unknown[] = [undefined, null, 42, 'spear', 'Pawn', 'toString', '__proto__', {}];
 
   it('drop rejects a bad kind or square', () => {
     const t = createPosition({
@@ -540,27 +497,21 @@ const place = (player: PlayerSide, kind: PieceKind, file: number, rank: number):
   to: sq(file, rank),
 });
 
-/** Marshals placed, white builds a tier-3 cannon on file 4 (rank 6) aiming at black. */
+/** Marshals placed, white puts its general on file 4 (rank 6) aiming at black. */
 function cannonTowerAgainst(blackMarshalRank: number, blackFiller: Move[]): GameState {
   return play(
     createInitialState(),
     place('black', 'marshal', 4, blackMarshalRank),
     place('white', 'marshal', 0, 8),
     blackFiller[0]!,
-    place('white', 'general', 4, 6),
+    place('white', 'pawn', 8, 8),
     blackFiller[1]!,
     place('white', 'general', 4, 6),
-    blackFiller[2]!,
-    place('white', 'cannon', 4, 6),
   );
 }
 
 describe('§9.5 check during placement', () => {
-  const filler = [
-    place('black', 'general', 0, 0),
-    place('black', 'general', 1, 0),
-    place('black', 'general', 2, 0),
-  ];
+  const filler = [place('black', 'pawn', 0, 0), place('black', 'pawn', 1, 0)];
 
   it('a placement may give check; the checked side must block and cannot finish', () => {
     const s = cannonTowerAgainst(0, filler);
@@ -594,8 +545,6 @@ describe('§9.5 check during placement', () => {
       place('white', 'marshal', 0, 8),
       { type: 'finishPlacement', player: 'black' },
       place('white', 'general', 4, 6),
-      place('white', 'general', 4, 6),
-      place('white', 'cannon', 4, 6),
       { type: 'finishPlacement', player: 'white' },
     );
     expect(s.phase).toBe('play');
@@ -618,10 +567,10 @@ function checkInvariants(state: GameState): void {
   expect(JSON.parse(JSON.stringify(state))).toEqual(state);
   expect(stateError(JSON.parse(JSON.stringify(state)))).toBeNull();
   for (const side of ['black', 'white'] as const) {
-    // §3.1 piece conservation: board + hand + removed by opponent = 38.
+    // §3.1 piece conservation: board + hand + removed by opponent = 25.
     expect(
       piecesOf(state, side) + handTotal(state.hands[side]) + state.captured[opponent(side)].length,
-    ).toBe(38);
+    ).toBe(25);
   }
   for (const s of allSquares()) {
     const stack = getStack(state.board, s);
@@ -634,8 +583,13 @@ function checkInvariants(state: GameState): void {
   expect(state.quietPlies).toBeLessThanOrEqual(QUIET_PLY_LIMIT + 1);
   if (state.phase !== 'finished') {
     expect(state.quietPlies).toBeLessThanOrEqual(QUIET_PLY_LIMIT);
-    // §10.1 the side that just moved is never left in check.
-    expect(inCheck({ ...state, turn: opponent(state.turn) })).toBe(false);
+    // §10.1 the side that just moved is never left in check, except a side that
+    // has finished placing (§9.5) and at the start of play (§11.1).
+    const waiting = state.phase === 'placement' && state.placementDone[opponent(state.turn)];
+    const noCaptures = state.captured.black.length + state.captured.white.length === 0;
+    const playStart = state.phase === 'play' && state.quietPlies === 0 && noCaptures;
+    if (!waiting && !playStart)
+      expect(inCheck({ ...state, turn: opponent(state.turn) })).toBe(false);
   }
 }
 

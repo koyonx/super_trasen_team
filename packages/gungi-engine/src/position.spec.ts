@@ -10,7 +10,9 @@ import {
 } from './position';
 import { createInitialState } from './setup';
 import { B, W, at, rng, sq } from './test-helpers';
+import { ROSTER } from './pieces';
 import type { GameState, Piece, PieceKind } from './types';
+import { PIECE_KINDS } from './types';
 
 const KINGS = [at(0, 0, B('marshal')), at(8, 8, W('marshal'))];
 
@@ -29,7 +31,7 @@ describe('§12.1 createPosition invariants', () => {
   it('accepts a reachable position', () => {
     const setup: PositionSetup = {
       stacks: [...KINGS, at(4, 4, W('pawn'), B('samurai'), B('cannon'))],
-      hands: { black: { pawn: 8 }, white: { general: 6 } },
+      hands: { black: { pawn: 4 }, white: { general: 1 } },
       turn: 'white',
       quietPlies: 3,
     };
@@ -52,7 +54,7 @@ describe('§12.1 createPosition invariants', () => {
 
   it('rejects unknown pieces and owners', () => {
     expectRejected(
-      { stacks: [...KINGS, at(4, 4, { kind: 'lancer', owner: 'black' } as unknown as Piece)] },
+      { stacks: [...KINGS, at(4, 4, { kind: 'spear', owner: 'black' } as unknown as Piece)] },
       PositionError.INVALID_PIECE,
     );
     expectRejected(
@@ -60,7 +62,7 @@ describe('§12.1 createPosition invariants', () => {
       PositionError.INVALID_PIECE,
     );
     expectRejected(
-      { stacks: KINGS, hands: { black: { lancer: 1 } as never } },
+      { stacks: KINGS, hands: { black: { spear: 1 } as never } },
       PositionError.INVALID_PIECE,
     );
   });
@@ -91,21 +93,20 @@ describe('§12.1 createPosition invariants', () => {
     expect(positionError({ stacks: [KINGS[0]!, at(8, 8, B('pawn'), W('marshal'))] })).toBeNull();
   });
 
-  it('§3.2 accepts any number of own pieces on the board', () => {
-    const kinds: PieceKind[] = [
-      ...Array<PieceKind>(6).fill('general'),
-      ...Array<PieceKind>(4).fill('lieutenant'),
-      ...Array<PieceKind>(4).fill('major'),
-      ...Array<PieceKind>(9).fill('pawn'),
-      'samurai',
-      'samurai',
-      'knight',
-    ];
-    const army = Array.from({ length: Math.ceil(kinds.length / 3) }, (_, i) =>
+  it('§3.2 accepts all 25 own pieces on the board', () => {
+    const kinds = PIECE_KINDS.filter((k) => k !== 'marshal').flatMap((k) =>
+      Array<PieceKind>(ROSTER[k]).fill(k),
+    );
+    expect(kinds).toHaveLength(24);
+    const army = Array.from({ length: 8 }, (_, i) =>
       at(i, 3, ...kinds.slice(i * 3, i * 3 + 3).map(B)),
     );
-    const base = [at(4, 0, B('marshal')), at(0, 8, W('marshal'))];
+    const base = [at(4, 0, B('marshal')), at(8, 8, W('marshal'))];
     expect(positionError({ stacks: [...base, ...army] })).toBeNull();
+    expectRejected(
+      { stacks: [...base, ...army], hands: { black: { lancer: 1 } } },
+      PositionError.ROSTER_EXCEEDED,
+    );
   });
 
   it('§3.1 rejects more pieces of a kind than the roster holds', () => {
@@ -138,8 +139,8 @@ describe('§12.1 createPosition invariants', () => {
 });
 
 describe('§12.1 the side not to move is never in check', () => {
-  /** A white tier-3 cannon on (4, 6) attacking down file 4 (§5.3). */
-  const whiteTower = at(4, 6, W('general'), W('general'), W('cannon'));
+  /** The white general on (4, 6) attacking down file 4 (§5.3.2). */
+  const whiteTower = at(4, 6, W('general'));
   /** Black's marshal on (4, 2), in reach of `whiteTower`. */
   const checked = [at(4, 2, B('marshal')), at(8, 8, W('marshal')), whiteTower];
 
@@ -168,7 +169,7 @@ describe('§12.1 the side not to move is never in check', () => {
         stacks: [
           at(4, 2, B('marshal')),
           whiteTower,
-          at(0, 2, B('general'), B('general'), B('cannon')),
+          at(0, 2, B('general')),
           at(0, 7, W('marshal')),
         ],
         turn: 'white',
@@ -191,12 +192,13 @@ describe('§12.1 what createPosition deliberately does not check', () => {
   });
 
   it('§11.2 returns a mated position unconcluded; the caller detects it', () => {
-    // Two white tier-3 cannons cover files 0 and 1 (§5.3).
+    // General on file 0, a tier-3 cannon onto (1, 1), lieutenant onto (1, 0) (§5.3).
     const s = createPosition({
       stacks: [
         at(0, 0, B('marshal')),
-        at(0, 6, W('general'), W('general'), W('cannon')),
-        at(1, 6, W('general'), W('general'), W('cannon')),
+        at(0, 6, W('general')),
+        at(1, 6, W('pawn'), W('pawn'), W('cannon')),
+        at(7, 6, W('lieutenant')),
         at(8, 8, W('marshal')),
       ],
     });
@@ -384,8 +386,10 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
 
   it('catches a marshal buried under a piece, on which legalMoves would throw', () => {
     // Black's marshal ends up under a white general: [W pawn, B marshal, W general]. Taking
-    // the general would put the capturer on the marshal, which the engine refuses to build.
-    const base = createPosition({ stacks: [...KINGS, at(4, 3, B('pawn'))] });
+    // the stack would keep the marshal under the capturer, which the engine refuses to build.
+    const base = createPosition({
+      stacks: [...KINGS, at(4, 1, B('pawn'), B('pawn'), B('lancer'))],
+    });
     const board = JSON.parse(JSON.stringify(base.board)) as Piece[][][];
     board[0]![0] = [];
     board[4]![4] = [W('pawn'), B('marshal'), W('general')];
@@ -418,7 +422,7 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
     expect(stateError(restored(midGame, { placementDone: { black: 1, white: true } }))).toBe(
       PositionError.MALFORMED,
     );
-    expect(stateError(restored(midGame, { captured: { black: ['lancer'], white: [] } }))).toBe(
+    expect(stateError(restored(midGame, { captured: { black: ['spear'], white: [] } }))).toBe(
       PositionError.INVALID_PIECE,
     );
     expect(stateError(restored(midGame, { ply: -1 }))).toBe(PositionError.INVALID_COUNT);
@@ -488,11 +492,7 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
   it('§10.1 allows the side not to move in check only where a game allows it', () => {
     // Black's marshal on (4, 2) is attacked by a white tier-3 cannon on (4, 6).
     const checked = createPosition({
-      stacks: [
-        at(4, 2, B('marshal')),
-        at(4, 6, W('general'), W('general'), W('cannon')),
-        KINGS[1]!,
-      ],
+      stacks: [at(4, 2, B('marshal')), at(4, 6, W('general')), KINGS[1]!],
       turn: 'white',
     });
     expect(stateError(restored(checked))).toBeNull();
@@ -519,8 +519,8 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
   });
 
   describe('§11.1 the play-start exception needs a play-start ply count', () => {
-    const tower = [W('general'), W('general'), W('cannon')];
-    /** Black's marshal on (4, 2), checked by a white tier-3 cannon on (4, 6). */
+    const tower = [W('general')];
+    /** Black's marshal on (4, 2), checked by the white general on (4, 6). */
     const fromPosition = createPosition({
       stacks: [at(4, 2, B('marshal')), at(4, 6, ...tower), KINGS[1]!],
       hands: { white: { pawn: 3 } },
@@ -538,9 +538,7 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
       play({ type: 'place', player: 'black', kind: 'marshal', to: sq(4, 2) });
       play({ type: 'place', player: 'white', kind: 'marshal', to: sq(8, 8) });
       play({ type: 'finishPlacement', player: 'black' });
-      for (const kind of ['general', 'general', 'cannon'] as const) {
-        play({ type: 'place', player: 'white', kind, to: sq(4, 6) });
-      }
+      play({ type: 'place', player: 'white', kind: 'general', to: sq(4, 6) });
       play({ type: 'finishPlacement', player: 'white' });
       return s;
     }
@@ -549,9 +547,9 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
       expect(fromPosition.ply).toBe(0);
       expect(stateError(restored(fromPosition))).toBeNull();
       const placed = fromPlacement();
-      expect(placed).toMatchObject({ phase: 'play', turn: 'white', ply: 7, quietPlies: 0 });
+      expect(placed).toMatchObject({ phase: 'play', turn: 'white', ply: 5, quietPlies: 0 });
       expect(inCheck({ ...placed, turn: 'black' })).toBe(true);
-      // 5 pieces on the board + 2 finishPlacement plies.
+      // 3 pieces on the board + 2 finishPlacement plies.
       expect(stateError(restored(placed))).toBeNull();
     });
 
@@ -574,7 +572,7 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
       for (const file of [0, 1, 2]) board = boardWithPiece(board, file, 5, W('pawn'));
       const forged = restored(placed, {
         board,
-        hands: { ...placed.hands, white: { ...placed.hands.white, pawn: 6 } },
+        hands: { ...placed.hands, white: { ...placed.hands.white, pawn: 1 } },
         ply: placed.ply + 5,
       });
       expect(stateError(forged)).toBe(PositionError.OPPONENT_IN_CHECK);

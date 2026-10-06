@@ -3,7 +3,7 @@ import { createEmptyBoard, getStack, setStack } from './board';
 import { createPosition } from './position';
 import { boardMoves, executeBoardMove, isInCheck, validateBoardMove } from './rules';
 import { B, W, at, sq } from './test-helpers';
-import type { BoardMove, GameState, Square } from './types';
+import type { BoardMove, GameState, Piece, PlayerSide, Square } from './types';
 import { MoveError } from './types';
 
 const mv = (
@@ -23,19 +23,15 @@ function play(state: GameState, move: BoardMove): GameState {
 const KINGS = [at(0, 0, B('marshal')), at(8, 8, W('marshal'))];
 
 /**
- * §11.1 the only reachable position where a marshal can be taken: play has
- * just started and white's last placements left black in check. A white
- * tier-3 cannon on (4, 6) bears down file 4 on whatever black has on (4, 2).
+ * A state whose board is put together directly, without the §12.1 checks of
+ * `createPosition`. Used only where the side to move can take the enemy
+ * marshal, which no legal game reaches (§11.1) but the move rules still define.
  */
-const atPlayStart = (...black: Parameters<typeof B>[0][]) =>
-  createPosition({
-    stacks: [
-      at(8, 8, W('marshal')),
-      at(4, 6, W('general'), W('general'), W('cannon')),
-      at(4, 2, ...black.map(B)),
-    ],
-    turn: 'white',
-  });
+function raw(turn: PlayerSide, ...stacks: { square: Square; pieces: Piece[] }[]): GameState {
+  const base = createPosition({ stacks: KINGS, turn });
+  const board = stacks.reduce((b, s) => setStack(b, s.square, s.pieces), createEmptyBoard());
+  return { ...base, board };
+}
 
 describe('§6.1 move to an empty square', () => {
   const s = createPosition({ stacks: [...KINGS, at(4, 4, B('pawn'))] });
@@ -49,7 +45,8 @@ describe('§6.1 move to an empty square', () => {
   });
 
   it('rejects a square outside the movement pattern', () => {
-    expect(validateBoardMove(s, mv('move', sq(4, 4), sq(4, 3)))).toBe(MoveError.UNREACHABLE);
+    expect(validateBoardMove(s, mv('move', sq(4, 4), sq(5, 5)))).toBe(MoveError.UNREACHABLE);
+    expect(validateBoardMove(s, mv('move', sq(4, 4), sq(4, 6)))).toBe(MoveError.UNREACHABLE);
     expect(validateBoardMove(s, mv('move', sq(4, 4), sq(4, 4)))).toBe(MoveError.UNREACHABLE);
   });
 
@@ -84,9 +81,9 @@ describe('§6.1 move to an empty square', () => {
 describe('§4.2 only the top piece moves', () => {
   it('moving the top reveals the piece below as the new top', () => {
     const s = createPosition({ stacks: [...KINGS, at(4, 4, B('fortress'), B('pawn'))] });
-    const next = play(s, mv('move', sq(4, 4), sq(3, 5)));
+    const next = play(s, mv('move', sq(4, 4), sq(4, 6)));
     expect(getStack(next.board, sq(4, 4))).toEqual([B('fortress')]);
-    expect(getStack(next.board, sq(3, 5))).toEqual([B('pawn')]);
+    expect(getStack(next.board, sq(4, 6))).toEqual([B('pawn')]);
   });
 
   it('a buried own piece cannot be moved', () => {
@@ -96,32 +93,62 @@ describe('§4.2 only the top piece moves', () => {
 
   it('§4.3 the landing tier sets the movement of the next turn', () => {
     const s = createPosition({
-      stacks: [...KINGS, at(4, 4, B('cannon')), at(4, 5, B('general'), B('general'))],
+      stacks: [...KINGS, at(4, 4, B('lancer'), B('pawn')), at(4, 5, B('lancer'), B('lancer'))],
     });
+    // A tier-2 pawn steps two squares.
+    expect(validateBoardMove(s, mv('move', sq(4, 4), sq(4, 2)))).toBeNull();
+    expect(validateBoardMove(s, mv('move', sq(4, 4), sq(4, 1)))).toBe(MoveError.UNREACHABLE);
     const next = play(s, mv('stack', sq(4, 4), sq(4, 5)));
+    expect(getStack(next.board, sq(4, 5))).toEqual([B('lancer'), B('lancer'), B('pawn')]);
+    // On tier 3 it steps three squares.
     const again = { ...next, turn: 'black' as const };
-    // A tier-1 cannon steps one square; on tier 3 it slides to the board edge.
-    expect(validateBoardMove(s, mv('move', sq(4, 4), sq(3, 4)))).toBeNull();
-    expect(validateBoardMove(s, mv('move', sq(4, 4), sq(2, 4)))).toBe(MoveError.UNREACHABLE);
     expect(validateBoardMove(again, mv('move', sq(4, 5), sq(4, 8)))).toBeNull();
-    expect(validateBoardMove(again, mv('move', sq(4, 5), sq(0, 5)))).toBeNull();
   });
 });
 
-describe('§6.2 no height condition', () => {
-  it('a tier-1 piece may capture the top of a 3-high stack', () => {
-    const s = createPosition({
-      stacks: [...KINGS, at(4, 4, B('pawn')), at(4, 5, W('pawn'), W('pawn'), W('general'))],
-    });
-    expect(validateBoardMove(s, mv('capture', sq(4, 4), sq(4, 5)))).toBeNull();
-  });
-
-  it('a tier-1 piece may stack onto a 2-high stack', () => {
+describe('§6.2 height condition', () => {
+  it('a tier-1 piece may neither capture nor stack onto a 2-high stack', () => {
     const s = createPosition({
       stacks: [...KINGS, at(4, 4, B('pawn')), at(4, 5, W('pawn'), W('samurai'))],
     });
+    expect(validateBoardMove(s, mv('capture', sq(4, 4), sq(4, 5)))).toBe(MoveError.TARGET_TOO_HIGH);
+    expect(validateBoardMove(s, mv('stack', sq(4, 4), sq(4, 5)))).toBe(MoveError.TARGET_TOO_HIGH);
+    expect(boardMoves(s, 'black').filter((m) => m.to.rank === 5 && m.to.file === 4)).toEqual([]);
+  });
+
+  it('a tier-2 piece may capture or stack onto a 2-high stack', () => {
+    const s = createPosition({
+      stacks: [...KINGS, at(4, 4, B('lancer'), B('pawn')), at(4, 5, W('pawn'), W('samurai'))],
+    });
+    expect(validateBoardMove(s, mv('capture', sq(4, 4), sq(4, 5)))).toBeNull();
     const next = play(s, mv('stack', sq(4, 4), sq(4, 5)));
     expect(getStack(next.board, sq(4, 5))).toEqual([W('pawn'), W('samurai'), B('pawn')]);
+  });
+
+  it('a tier-2 piece may not take a 3-high stack', () => {
+    const s = createPosition({
+      stacks: [
+        ...KINGS,
+        at(4, 4, B('lancer'), B('pawn')),
+        at(4, 5, W('pawn'), W('samurai'), W('lancer')),
+      ],
+    });
+    expect(validateBoardMove(s, mv('capture', sq(4, 4), sq(4, 5)))).toBe(MoveError.TARGET_TOO_HIGH);
+  });
+
+  it('a higher piece may always take or stack onto a lower stack', () => {
+    const s = createPosition({
+      stacks: [...KINGS, at(4, 4, B('pawn'), B('pawn'), B('lancer')), at(4, 5, W('samurai'))],
+    });
+    expect(validateBoardMove(s, mv('capture', sq(4, 4), sq(4, 5)))).toBeNull();
+    expect(validateBoardMove(s, mv('stack', sq(4, 4), sq(4, 5)))).toBeNull();
+  });
+
+  it('the height condition is checked after reachability', () => {
+    const s = createPosition({
+      stacks: [...KINGS, at(4, 4, B('pawn')), at(5, 5, W('pawn'), W('samurai'))],
+    });
+    expect(validateBoardMove(s, mv('capture', sq(4, 4), sq(5, 5)))).toBe(MoveError.UNREACHABLE);
   });
 });
 
@@ -159,8 +186,8 @@ describe('§6.3 stack (ツケ)', () => {
     expect(validateBoardMove(s, mv('stack', sq(4, 4), sq(4, 5)))).toBe(
       MoveError.CANNOT_STACK_ON_MARSHAL,
     );
-    const t = atPlayStart('marshal');
-    expect(validateBoardMove(t, mv('stack', sq(4, 6), sq(4, 2), 'white'))).toBe(
+    const t = raw('white', at(4, 2, B('marshal')), at(4, 3, W('pawn')), at(8, 8, W('marshal')));
+    expect(validateBoardMove(t, mv('stack', sq(4, 3), sq(4, 2), 'white'))).toBe(
       MoveError.CANNOT_STACK_ON_MARSHAL,
     );
   });
@@ -173,11 +200,11 @@ describe('§6.3 stack (ツケ)', () => {
 
   it('§4.5 a fortress may stack onto own and enemy pieces', () => {
     const s = createPosition({
-      stacks: [...KINGS, at(4, 4, B('fortress')), at(4, 5, B('pawn')), at(5, 5, W('pawn'))],
+      stacks: [...KINGS, at(4, 4, B('fortress')), at(4, 5, B('pawn')), at(5, 4, W('pawn'))],
     });
     expect(validateBoardMove(s, mv('stack', sq(4, 4), sq(4, 5)))).toBeNull();
-    expect(validateBoardMove(s, mv('stack', sq(4, 4), sq(5, 5)))).toBeNull();
-    expect(validateBoardMove(s, mv('capture', sq(4, 4), sq(5, 5)))).toBeNull();
+    expect(validateBoardMove(s, mv('stack', sq(4, 4), sq(5, 4)))).toBeNull();
+    expect(validateBoardMove(s, mv('capture', sq(4, 4), sq(5, 4)))).toBeNull();
   });
 
   it('§4.5 other pieces may stack onto a fortress', () => {
@@ -203,95 +230,86 @@ describe('§6.4 capture', () => {
     expect(next.turn).toBe('white');
   });
 
-  it('removes only the top and the capturer lands on the remaining stack', () => {
-    // The worked example of §6.4: [白兵, 黒侍, 白大] taken by a black cannon.
+  it('removes every enemy piece of the stack and keeps own pieces below the capturer', () => {
+    // The worked example of §6.4: [白兵, 黒侍, 白槍] taken by a tier-3 black general.
     const s = createPosition({
       stacks: [
         ...KINGS,
-        at(4, 4, B('pawn'), B('general'), B('cannon')),
-        at(4, 5, W('pawn'), B('samurai'), W('general')),
+        at(4, 2, B('pawn'), B('pawn'), B('general')),
+        at(4, 5, W('pawn'), B('samurai'), W('lancer')),
       ],
     });
-    const next = play(s, mv('capture', sq(4, 4), sq(4, 5)));
-    expect(getStack(next.board, sq(4, 5))).toEqual([W('pawn'), B('samurai'), B('cannon')]);
-    expect(getStack(next.board, sq(4, 4))).toEqual([B('pawn'), B('general')]);
-    expect(next.captured.black).toEqual(['general']);
+    const next = play(s, mv('capture', sq(4, 2), sq(4, 5)));
+    expect(getStack(next.board, sq(4, 5))).toEqual([B('samurai'), B('general')]);
+    expect(getStack(next.board, sq(4, 2))).toEqual([B('pawn'), B('pawn')]);
+    expect(next.captured.black).toEqual(['pawn', 'lancer']);
     expect(next.turn).toBe('white');
     expect(next.ply).toBe(1);
   });
 
-  it('the capturer lands on an uncovered enemy piece', () => {
+  it('takes an enemy piece buried under the enemy top as well', () => {
     const s = createPosition({
-      stacks: [...KINGS, at(4, 4, B('pawn')), at(4, 5, W('samurai'), W('general'))],
+      stacks: [...KINGS, at(4, 4, B('lancer'), B('pawn')), at(4, 5, W('samurai'), W('lancer'))],
     });
     const next = play(s, mv('capture', sq(4, 4), sq(4, 5)));
-    expect(getStack(next.board, sq(4, 5))).toEqual([W('samurai'), B('pawn')]);
-    expect(getStack(next.board, sq(4, 4))).toEqual([]);
+    expect(getStack(next.board, sq(4, 5))).toEqual([B('pawn')]);
+    expect(next.captured.black).toEqual(['samurai', 'lancer']);
   });
 
-  it('the capturer lands on an uncovered own piece', () => {
+  it('own pieces under the enemy top stay and the capturer lands on them', () => {
     const s = createPosition({
-      stacks: [...KINGS, at(4, 4, B('pawn')), at(4, 5, B('samurai'), W('general'))],
+      stacks: [
+        ...KINGS,
+        at(4, 4, B('pawn'), B('pawn'), B('lancer')),
+        at(4, 5, B('pawn'), B('samurai'), W('lancer')),
+      ],
     });
     const next = play(s, mv('capture', sq(4, 4), sq(4, 5)));
-    expect(getStack(next.board, sq(4, 5))).toEqual([B('samurai'), B('pawn')]);
+    expect(getStack(next.board, sq(4, 5))).toEqual([B('pawn'), B('samurai'), B('lancer')]);
+    expect(next.captured.black).toEqual(['lancer']);
   });
 
-  it('§4.1 capturing the top of a 3-high stack keeps it at 3', () => {
+  it('an enemy piece buried under an own top cannot be captured (stack only)', () => {
     const s = createPosition({
-      stacks: [...KINGS, at(4, 4, B('pawn')), at(4, 5, W('pawn'), W('samurai'), W('general'))],
+      stacks: [...KINGS, at(4, 4, B('lancer'), B('pawn')), at(4, 5, W('samurai'), B('pawn'))],
     });
-    const next = play(s, mv('capture', sq(4, 4), sq(4, 5)));
-    expect(getStack(next.board, sq(4, 5))).toEqual([W('pawn'), W('samurai'), B('pawn')]);
+    expect(validateBoardMove(s, mv('capture', sq(4, 4), sq(4, 5)))).toBe(
+      MoveError.CANNOT_CAPTURE_OWN,
+    );
+    expect(validateBoardMove(s, mv('stack', sq(4, 4), sq(4, 5)))).toBeNull();
   });
 
   it('a capturer leaving a stack uncovers the piece below it', () => {
     const s = createPosition({
-      stacks: [...KINGS, at(4, 4, B('pawn'), B('pawn')), at(5, 5, W('samurai'))],
+      stacks: [...KINGS, at(4, 4, B('pawn'), B('lancer')), at(5, 5, W('samurai'))],
     });
     const next = play(s, mv('capture', sq(4, 4), sq(5, 5)));
-    expect(getStack(next.board, sq(5, 5))).toEqual([B('pawn')]);
+    expect(getStack(next.board, sq(5, 5))).toEqual([B('lancer')]);
     expect(getStack(next.board, sq(4, 4))).toEqual([B('pawn')]);
   });
 
-  it('§4.5 a capturing fortress rises to tier 2 and keeps its movement', () => {
+  it('§4.5 a capturing fortress lands on its own pieces and moves at its new tier', () => {
     const s = createPosition({
-      stacks: [...KINGS, at(4, 4, B('fortress')), at(4, 5, W('pawn'), W('samurai'))],
+      stacks: [...KINGS, at(4, 4, B('pawn'), B('fortress')), at(4, 5, B('pawn'), W('samurai'))],
     });
     const next = play(s, mv('capture', sq(4, 4), sq(4, 5)));
-    expect(getStack(next.board, sq(4, 5))).toEqual([W('pawn'), B('fortress')]);
-    // §5.3.8 eight directions, one step, whatever the tier.
+    expect(getStack(next.board, sq(4, 5))).toEqual([B('pawn'), B('fortress')]);
+    // §5.3.9 F, L, R, BL, BR with range 2 at tier 2.
     const back = { ...next, turn: 'black' as const };
     const fromFortress = boardMoves(back, 'black').filter((m) => m.from.rank === 5);
-    expect(fromFortress.filter((m) => m.type === 'move')).toHaveLength(8);
+    expect(fromFortress).toHaveLength(10);
   });
 
-  it('§4.5 a fortress reached by capture may be stacked on, and may climb to tier 3', () => {
-    const s = createPosition({
-      stacks: [
-        ...KINGS,
-        at(4, 4, W('pawn'), B('fortress'), W('general')),
-        at(4, 3, B('fortress')),
-        at(3, 3, B('pawn'), B('pawn'), W('samurai')),
-      ],
-      turn: 'white',
-    });
-    expect(validateBoardMove(s, mv('stack', sq(3, 3), sq(4, 4), 'white'))).toBe(
-      MoveError.STACK_FULL,
+  it('§4.4 capturing a marshal leaves no enemy piece behind', () => {
+    const s = raw(
+      'white',
+      at(4, 2, B('pawn'), B('marshal')),
+      at(4, 6, W('pawn'), W('general')),
+      at(8, 8, W('marshal')),
     );
-    const black = { ...s, turn: 'black' as const };
-    // The full stack cannot be stacked on, but a capture lands on tier 3.
-    expect(validateBoardMove(black, mv('stack', sq(4, 3), sq(4, 4)))).toBe(MoveError.STACK_FULL);
-    const next = play(black, mv('capture', sq(4, 3), sq(4, 4)));
-    expect(getStack(next.board, sq(4, 4))).toEqual([W('pawn'), B('fortress'), B('fortress')]);
-    expect(getStack(next.board, sq(4, 3))).toEqual([]);
-  });
-
-  it('§4.4 capturing a marshal on top of a stack lands on what is below it', () => {
-    const s = atPlayStart('pawn', 'marshal');
     const next = play(s, mv('capture', sq(4, 6), sq(4, 2), 'white'));
-    expect(getStack(next.board, sq(4, 2))).toEqual([B('pawn'), W('cannon')]);
-    expect(next.captured.white).toEqual(['marshal']);
+    expect(getStack(next.board, sq(4, 2))).toEqual([W('general')]);
+    expect(next.captured.white).toEqual(['pawn', 'marshal']);
   });
 
   it('rejects capturing an own piece', () => {
@@ -303,31 +321,40 @@ describe('§6.4 capture', () => {
 
   it('white captures toward lower ranks', () => {
     const s = createPosition({
-      stacks: [...KINGS, at(4, 4, B('pawn')), at(4, 5, W('pawn'))],
+      stacks: [...KINGS, at(4, 3, B('pawn')), at(4, 5, W('lancer'))],
       turn: 'white',
     });
-    const next = play(s, mv('capture', sq(4, 5), sq(4, 4), 'white'));
-    expect(getStack(next.board, sq(4, 4))).toEqual([W('pawn')]);
+    const next = play(s, mv('capture', sq(4, 5), sq(4, 3), 'white'));
+    expect(getStack(next.board, sq(4, 3))).toEqual([W('lancer')]);
     expect(next.captured.white).toEqual(['pawn']);
     expect(next.turn).toBe('black');
   });
 
-  it('a jumping piece captures over a blocker', () => {
+  it('§5.4 a jumping piece captures over a low blocker but not over a taller one', () => {
     const s = createPosition({
-      stacks: [...KINGS, at(4, 2, B('knight')), at(4, 3, W('pawn')), at(5, 4, W('general'))],
+      stacks: [...KINGS, at(4, 2, B('cannon')), at(4, 3, W('pawn')), at(4, 5, W('lancer'))],
     });
-    expect(validateBoardMove(s, mv('capture', sq(4, 2), sq(5, 4)))).toBeNull();
+    expect(validateBoardMove(s, mv('capture', sq(4, 2), sq(4, 5)))).toBeNull();
+    const t = createPosition({
+      stacks: [
+        ...KINGS,
+        at(4, 2, B('cannon')),
+        at(4, 3, W('pawn'), W('pawn')),
+        at(4, 5, W('lancer')),
+      ],
+    });
+    expect(validateBoardMove(t, mv('capture', sq(4, 2), sq(4, 5)))).toBe(MoveError.UNREACHABLE);
   });
 });
 
 describe('§11.4 quiet-ply counter', () => {
   const s = createPosition({
-    stacks: [...KINGS, at(4, 4, B('pawn')), at(4, 5, W('pawn')), at(3, 5, B('general'))],
+    stacks: [...KINGS, at(4, 4, B('pawn')), at(4, 5, W('pawn')), at(2, 5, B('general'))],
     quietPlies: 10,
   });
   it('move and stack increment it', () => {
     expect(play(s, mv('stack', sq(4, 4), sq(4, 5))).quietPlies).toBe(11);
-    expect(play(s, mv('move', sq(3, 5), sq(3, 6))).quietPlies).toBe(11);
+    expect(play(s, mv('move', sq(2, 5), sq(2, 6))).quietPlies).toBe(11);
   });
   it('capture resets it', () => {
     expect(play(s, mv('capture', sq(4, 4), sq(4, 5))).quietPlies).toBe(0);
@@ -352,65 +379,42 @@ describe('§6 boardMoves generation', () => {
     expect(moves).toContainEqual(mv('stack', sq(4, 4), sq(4, 5)));
     expect(moves).toContainEqual(mv('stack', sq(4, 4), sq(3, 5)));
     expect(moves).not.toContainEqual(mv('capture', sq(4, 4), sq(3, 5)));
-    // Full enemy stack: capture only.
-    expect(moves.filter((m) => m.to.file === 5 && m.to.rank === 5)).toEqual([
-      mv('capture', sq(4, 4), sq(5, 5)),
-    ]);
+    // A 3-high stack is out of reach for a tier-2 piece (§6.2).
+    expect(moves.filter((m) => m.to.file === 5 && m.to.rank === 5)).toEqual([]);
   });
 
   it('offers only capture against an enemy marshal', () => {
-    const toMarshal = boardMoves(atPlayStart('marshal'), 'white').filter(
-      (m) => m.to.file === 4 && m.to.rank === 2,
-    );
+    const s = raw('white', at(4, 2, B('marshal')), at(4, 6, W('general')), at(8, 8, W('marshal')));
+    const toMarshal = boardMoves(s, 'white').filter((m) => m.to.file === 4 && m.to.rank === 2);
     expect(toMarshal).toEqual([mv('capture', sq(4, 6), sq(4, 2), 'white')]);
   });
 
   it('offers a fortress both stack and capture against an enemy piece', () => {
     const s = createPosition({
-      stacks: [...KINGS, at(4, 4, B('fortress')), at(4, 5, W('samurai')), at(3, 5, B('pawn'))],
+      stacks: [...KINGS, at(4, 4, B('fortress')), at(4, 5, W('samurai')), at(3, 4, B('pawn'))],
     });
     const fromFortress = boardMoves(s, 'black').filter((m) => m.from.file === 4);
     expect(fromFortress).toContainEqual(mv('stack', sq(4, 4), sq(4, 5)));
     expect(fromFortress).toContainEqual(mv('capture', sq(4, 4), sq(4, 5)));
-    expect(fromFortress).toContainEqual(mv('stack', sq(4, 4), sq(3, 5)));
+    expect(fromFortress).toContainEqual(mv('stack', sq(4, 4), sq(3, 4)));
   });
 
-  it('a lone tier-1 pawn in the middle has exactly one move', () => {
+  it('a lone tier-1 pawn in the middle has exactly two moves', () => {
     const s = createPosition({ stacks: [...KINGS, at(4, 4, B('pawn'))] });
     const pawnMoves = boardMoves(s, 'black').filter((m) => m.from.file === 4);
-    expect(pawnMoves).toEqual([mv('move', sq(4, 4), sq(4, 5))]);
+    expect(pawnMoves).toEqual([mv('move', sq(4, 4), sq(4, 5)), mv('move', sq(4, 4), sq(4, 3))]);
   });
 
   it('buried pieces generate nothing', () => {
     const s = createPosition({ stacks: [...KINGS, at(4, 4, B('cannon'), W('pawn'))] });
     expect(boardMoves(s, 'black').some((m) => m.from.file === 4)).toBe(false);
-    // The white pawn on tier 2 moves F, FL, FR (toward lower ranks).
+    // The white pawn on tier 2 steps two squares forward and back.
     expect(
       boardMoves(s, 'white')
         .filter((m) => m.from.file === 4 && m.from.rank === 4)
         .map((m) => `${m.to.file},${m.to.rank}`)
         .sort(),
-    ).toEqual(['3,3', '4,3', '5,3']);
-  });
-});
-
-describe('§7 謀 mimicry in board moves', () => {
-  it('a tier-2 tactician moves like the piece below it', () => {
-    const s = createPosition({
-      stacks: [...KINGS, at(4, 4, W('knight'), B('tactician'))],
-    });
-    const moves = boardMoves(s, 'black').filter((m) => m.from.file === 4 && m.from.rank === 4);
-    expect(moves.map((m) => `${m.to.file},${m.to.rank}`).sort()).toEqual(
-      ['2,5', '3,6', '5,6', '6,5'].sort(),
-    );
-  });
-
-  it('after leaving the stack it moves as a tier-1 tactician', () => {
-    const s = createPosition({ stacks: [...KINGS, at(4, 4, W('knight'), B('tactician'))] });
-    const next = play(s, mv('move', sq(4, 4), sq(3, 6)));
-    const again = { ...next, turn: 'black' as const };
-    expect(validateBoardMove(again, mv('move', sq(3, 6), sq(3, 5)))).toBeNull();
-    expect(validateBoardMove(again, mv('move', sq(3, 6), sq(5, 7)))).toBe(MoveError.UNREACHABLE);
+    ).toEqual(['4,2', '4,3', '4,5', '4,6']);
   });
 });
 
@@ -423,23 +427,49 @@ describe('§10.1 check detection', () => {
     expect(isInCheck(board, 'white')).toBe(false);
   });
 
-  it('a marshal on a taller stack is still attacked by a tier-1 piece', () => {
-    const board = createPosition({
+  it('§6.2 a marshal on a 2-high stack is safe from tier-1 pieces only', () => {
+    const low = createPosition({
       stacks: [at(4, 4, B('pawn'), B('marshal')), at(4, 5, W('pawn')), at(8, 8, W('marshal'))],
     }).board;
-    expect(isInCheck(board, 'black')).toBe(true);
+    expect(isInCheck(low, 'black')).toBe(false);
+    const high = createPosition({
+      stacks: [
+        at(4, 4, B('pawn'), B('marshal')),
+        at(4, 5, W('lancer'), W('pawn')),
+        at(8, 8, W('marshal')),
+      ],
+    }).board;
+    expect(isInCheck(high, 'black')).toBe(true);
   });
 
   it('a slide attack is blocked by an intervening piece', () => {
-    const tower = at(4, 8, W('general'), W('general'), W('cannon'));
     const open = createPosition({
-      stacks: [at(4, 0, B('marshal')), tower, at(0, 8, W('marshal'))],
+      stacks: [at(4, 0, B('marshal')), at(4, 8, W('general')), at(0, 8, W('marshal'))],
     });
     expect(isInCheck(open.board, 'black')).toBe(true);
     const blocked = createPosition({
-      stacks: [at(4, 0, B('marshal')), at(4, 3, B('pawn')), tower, at(0, 8, W('marshal'))],
+      stacks: [
+        at(4, 0, B('marshal')),
+        at(4, 3, B('pawn')),
+        at(4, 8, W('general')),
+        at(0, 8, W('marshal')),
+      ],
     });
     expect(isInCheck(blocked.board, 'black')).toBe(false);
+  });
+
+  it('§5.4 a jump attack passes over low stacks only', () => {
+    const over = (height: number) =>
+      createPosition({
+        stacks: [
+          at(4, 0, B('marshal')),
+          at(4, 1, ...Array.from({ length: height }, () => B('pawn'))),
+          at(4, 3, W('cannon')),
+          at(0, 8, W('marshal')),
+        ],
+      }).board;
+    expect(isInCheck(over(1), 'black')).toBe(true);
+    expect(isInCheck(over(2), 'black')).toBe(false);
   });
 
   it('buried enemy pieces do not attack', () => {
@@ -447,17 +477,6 @@ describe('§10.1 check detection', () => {
       stacks: [at(4, 4, B('marshal')), at(4, 5, W('pawn'), B('pawn')), at(8, 8, W('marshal'))],
     }).board;
     expect(isInCheck(board, 'black')).toBe(false);
-  });
-
-  it('a mimicking tactician gives check', () => {
-    const board = createPosition({
-      stacks: [
-        at(4, 0, B('marshal')),
-        at(4, 4, B('pawn'), B('cannon'), W('tactician')),
-        at(8, 8, W('marshal')),
-      ],
-    }).board;
-    expect(isInCheck(board, 'black')).toBe(true);
   });
 
   it('a side without a marshal is never in check', () => {
