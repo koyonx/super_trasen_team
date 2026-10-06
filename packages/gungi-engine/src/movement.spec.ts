@@ -264,9 +264,41 @@ describe('§5.4 jump height limit', () => {
     expect(r).not.toContain('0,4');
   });
 
-  it('R-2 the archer diagonal landings pass over the square straight ahead only', () => {
-    const r = reach('archer', 1, 'black', wall('black', 3, [-1, 1], [1, 1]));
+  it.each(SIDES)(
+    'R-2 a tall stack straight ahead blocks all three archer landings (%s)',
+    (owner) => {
+      expect(reach('archer', 1, owner, wall(owner, 3, [0, 1]))).toEqual(offsets([0, -1]));
+    },
+  );
+
+  it.each(SIDES)('R-2 tall stacks on the front diagonals block no archer landing (%s)', (owner) => {
+    const r = reach('archer', 1, owner, wall(owner, 3, [-1, 1], [1, 1]));
     expect(r).toEqual(offsets([-1, 2], [0, 2], [1, 2], [0, -1]));
+  });
+
+  it.each(SIDES)('R-2 review diagram: own pawns ahead and front-right (%s)', (owner) => {
+    const pawn: Piece = { kind: 'pawn', owner };
+    const setup = (b: Board) =>
+      putRelative(owner, 1, 1, [pawn])(putRelative(owner, 0, 1, [pawn])(b));
+    expect(reach('archer', 1, owner, setup)).toEqual(offsets([-1, 2], [0, 2], [1, 2], [0, -1]));
+  });
+
+  it.each(SIDES)(
+    'a tier-2 archer reaches the third rank only over the two squares straight ahead (%s)',
+    (owner) => {
+      const second = reach('archer', 2, owner, wall(owner, 3, [0, 2]));
+      expect(second).toEqual(offsets([-1, 2], [0, 2], [1, 2], [0, -1], [0, -2]));
+      const diagonals = reach('archer', 2, owner, wall(owner, 3, [-1, 1], [1, 1], [-1, 2], [1, 2]));
+      expect(diagonals).toEqual(
+        offsets([-1, 2], [0, 2], [1, 2], [-1, 3], [0, 3], [1, 3], [0, -1], [0, -2]),
+      );
+    },
+  );
+
+  it.each(SIDES)('a tier-2 musket reaches (0,+3) over (0,+1) and (0,+2) (%s)', (owner) => {
+    expect(reach('musket', 2, owner, wall(owner, 3, [0, 2]))).toEqual(
+      offsets([0, 2], [-1, -1], [1, -1], [-2, -2], [2, -2]),
+    );
   });
 
   it('the landing square itself may hold a stack of any height', () => {
