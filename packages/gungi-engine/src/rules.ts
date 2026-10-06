@@ -16,6 +16,7 @@ import {
   setStack,
   topPiece,
 } from './board';
+import { applyBetrayal, betrayalError } from './betrayal';
 import { reachableSquares } from './movement';
 import { opponent } from './pieces';
 import type { Board, BoardMove, GameState, PlayerSide, Square, Stack } from './types';
@@ -50,12 +51,20 @@ export function validateBoardMove(state: GameState, move: BoardMove): MoveError 
 
   const target = getStack(state.board, move.to);
   const top = topPiece(target);
-  if (move.type === 'move') return top ? MoveError.TARGET_NOT_EMPTY : null;
+  const betray = move.betray === true;
+  if (move.type === 'move') {
+    if (top) return MoveError.TARGET_NOT_EMPTY;
+    return betray ? MoveError.INVALID_BETRAYAL : null;
+  }
   if (!top) return MoveError.TARGET_EMPTY;
   if (move.type === 'capture' && top.owner === move.player) return MoveError.CANNOT_CAPTURE_OWN;
   // §6.2 only stacks no higher than the mover's tier can be taken or stacked on.
   if (target.length > origin.length) return MoveError.TARGET_TOO_HIGH;
-  return move.type === 'capture' ? null : stackError(target);
+  if (move.type === 'capture') return betray ? MoveError.INVALID_BETRAYAL : null;
+  const error = stackError(target);
+  if (error || !betray) return error;
+  // §7.1 betrayal only accompanies a stack.
+  return betrayalError(piece, target, state.hands[move.player]);
 }
 
 /** Applies a pseudo-legal board move. Caller must have validated it. */
@@ -97,6 +106,19 @@ export function executeBoardMove(state: GameState, move: BoardMove): GameState {
     };
   }
 
+  if (move.type === 'stack' && move.betray === true) {
+    // §7.2 every enemy piece is swapped for a same-kind piece from hand.
+    const betrayal = applyBetrayal(target, move.player, state.hands[move.player]);
+    return {
+      ...advance(setStack(lift(state.board), move.to, [...betrayal.stack, piece])),
+      hands: { ...state.hands, [move.player]: betrayal.hand },
+      captured: {
+        ...state.captured,
+        [move.player]: [...state.captured[move.player], ...betrayal.removed],
+      },
+    };
+  }
+
   const landed: Stack = move.type === 'stack' ? [...target, piece] : [piece];
   return advance(setStack(lift(state.board), move.to, landed));
 }
@@ -116,7 +138,13 @@ export function boardMoves(state: GameState, side: PlayerSide): BoardMove[] {
         continue;
       }
       if (target.length > origin.length) continue;
-      if (stackError(target) === null) moves.push({ type: 'stack', player: side, from, to });
+      if (stackError(target) === null) {
+        moves.push({ type: 'stack', player: side, from, to });
+        // §7.3 a tactician may also stack with betrayal.
+        if (betrayalError(piece, target, state.hands[side]) === null) {
+          moves.push({ type: 'stack', player: side, from, to, betray: true });
+        }
+      }
       if (top.owner !== side) moves.push({ type: 'capture', player: side, from, to });
     }
   }

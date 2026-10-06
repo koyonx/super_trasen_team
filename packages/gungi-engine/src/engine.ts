@@ -49,16 +49,17 @@ function isSide(value: unknown): value is PlayerSide {
 }
 
 /**
- * First gate for untrusted input (e.g. a WebSocket payload): a known `type`
- * and, except for `agreeDraw`, a valid `player`. The payload is checked by
+ * First gate for untrusted input (e.g. a WebSocket payload): a known `type`,
+ * `betray` absent or a boolean and, except for `agreeDraw`, a valid `player`. The payload is checked by
  * the per-type validators, which reject bad squares with `INVALID_SQUARE` and
  * unknown piece kinds with `INVALID_MOVE` before touching the board, so a
  * malformed move never throws (see the §12.2 malformed-input specs).
  */
 function isWellFormed(move: unknown): move is Move {
   if (typeof move !== 'object' || move === null) return false;
-  const { type, player } = move as Record<string, unknown>;
+  const { type, player, betray } = move as Record<string, unknown>;
   if (typeof type !== 'string' || !MOVE_TYPES.has(type)) return false;
+  if (betray !== undefined && typeof betray !== 'boolean') return false;
   return type === 'agreeDraw' || isSide(player);
 }
 
@@ -75,12 +76,20 @@ function validatePseudo(state: GameState, move: GameMove): MoveError | null {
   switch (move.type) {
     case 'place':
     case 'finishPlacement':
-      return validatePlacementMove(state, move);
-    case 'drop':
-      return validateDrop(state, move);
+    case 'drop': {
+      const error =
+        move.type === 'drop' ? validateDrop(state, move) : validatePlacementMove(state, move);
+      // §7.1 / R-4 betrayal only accompanies a board stack, never a drop.
+      return error ?? (betrays(move) ? MoveError.INVALID_BETRAYAL : null);
+    }
     default:
       return validateBoardMove(state, move);
   }
+}
+
+/** Whether an (untyped) payload asks for betrayal. */
+function betrays(move: GameMove): boolean {
+  return (move as { readonly betray?: unknown }).betray === true;
 }
 
 function execute(state: GameState, move: GameMove): GameState {
@@ -147,7 +156,7 @@ function conclude(state: GameState): GameState {
 
 /** §11.4 moves after which no earlier position can recur. */
 function isIrreversible(move: GameMove): boolean {
-  return move.type === 'capture' || move.type === 'drop';
+  return move.type === 'capture' || move.type === 'drop' || betrays(move);
 }
 
 function applyGameMove(state: GameState, move: GameMove): MoveResult {

@@ -100,6 +100,8 @@ export interface BoardMove {
   readonly player: PlayerSide;
   readonly from: Square;
   readonly to: Square;
+  /** §7.3 `true` to betray the enemy pieces of the target (tactician `stack` only). */
+  readonly betray?: boolean;
 }
 
 export interface DropMove {
@@ -147,6 +149,8 @@ export const MoveError = {
   TARGET_NOT_EMPTY: 'TARGET_NOT_EMPTY',
   TARGET_EMPTY: 'TARGET_EMPTY',
   CANNOT_CAPTURE_OWN: 'CANNOT_CAPTURE_OWN',
+  INVALID_BETRAYAL: 'INVALID_BETRAYAL',
+  BETRAYAL_HAND_SHORT: 'BETRAYAL_HAND_SHORT',
   SELF_CHECK: 'SELF_CHECK',
   INVALID_MOVE: 'INVALID_MOVE',
 } as const;
