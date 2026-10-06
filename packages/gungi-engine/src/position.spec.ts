@@ -267,6 +267,21 @@ describe('§12.1 positionError on malformed input', () => {
     }
   });
 
+  it('rejects sparse arrays instead of throwing (holes read as undefined)', () => {
+    const pawn = B('pawn');
+    const holed = (length: number, entries: Record<number, unknown>): unknown[] => {
+      const arr: unknown[] = new Array(length);
+      for (const [i, v] of Object.entries(entries)) arr[Number(i)] = v;
+      return arr;
+    };
+    for (const pieces of [holed(2, { 1: pawn }), holed(2, { 0: pawn }), new Array(1)]) {
+      expect(check({ stacks: [...KINGS, { square: sq(4, 4), pieces }] })).toBe(
+        PositionError.INVALID_PIECE,
+      );
+    }
+    expect(check({ stacks: holed(3, { 0: KINGS[0], 2: KINGS[1] }) })).toBe(PositionError.MALFORMED);
+  });
+
   it('copies the hands so the state does not share them with the setup', () => {
     const hand = { pawn: 1 };
     const s = createPosition({ stacks: KINGS, hands: { black: hand } });
@@ -296,7 +311,12 @@ describe('§12.1 positionError on malformed input', () => {
     ];
     if (depth <= 0 || rand() < 0.3) return pick(leaves);
     const size = Math.floor(rand() * 4);
-    if (rand() < 0.5) return Array.from({ length: size }, () => randomValue(rand, depth - 1));
+    if (rand() < 0.5) {
+      const arr = Array.from({ length: size }, () => randomValue(rand, depth - 1));
+      // Sometimes sparse (not representable in JSON, but a caller may still pass one).
+      if (size > 0 && rand() < 0.2) delete arr[Math.floor(rand() * size)];
+      return arr;
+    }
     const keys = ['square', 'pieces', 'kind', 'owner', 'file', 'rank', 'black', 'white', 'pawn'];
     return Object.fromEntries(
       Array.from({ length: size }, () => [pick(keys), randomValue(rand, depth - 1)]),
@@ -409,6 +429,25 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
     );
     expect(stateError(restored(midGame, { ply: -1 }))).toBe(PositionError.INVALID_COUNT);
     expect(stateError(restored(midGame, { turn: 'red' }))).toBe(PositionError.INVALID_TURN);
+  });
+
+  it('rejects sparse board and captured arrays instead of throwing', () => {
+    const board = () => JSON.parse(JSON.stringify(midGame.board)) as unknown[][][];
+    const rowHole = board();
+    rowHole[0] = new Array(9);
+    const missingRow = board();
+    delete missingRow[4];
+    const stackHole = board();
+    stackHole[3]![3] = new Array(1);
+    const pieceHole = board();
+    delete pieceHole[4]![4]![0]; // [<hole>, B samurai]
+    expect(stateError(restored(midGame, { board: rowHole }))).toBe(PositionError.MALFORMED);
+    expect(stateError(restored(midGame, { board: missingRow }))).toBe(PositionError.MALFORMED);
+    expect(stateError(restored(midGame, { board: stackHole }))).toBe(PositionError.INVALID_PIECE);
+    expect(stateError(restored(midGame, { board: pieceHole }))).toBe(PositionError.INVALID_PIECE);
+    expect(stateError(restored(midGame, { captured: { black: new Array(1), white: [] } }))).toBe(
+      PositionError.INVALID_PIECE,
+    );
   });
 
   it('checks the phase against placementDone and the result', () => {
@@ -559,10 +598,19 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
       const state = restored(midGame) as Record<string, unknown>;
       const field = pick(Object.keys(state));
       const roll = rand();
-      if (field === 'board' && roll < 0.6) {
+      if (field === 'board' && roll < 0.4) {
         state.board = boardWith(midGame, Math.floor(rand() * 9), Math.floor(rand() * 9), [
           pick(values),
         ]);
+      } else if (field === 'board' && roll < 0.6) {
+        // A hole somewhere in the grid: a missing row, stack or piece.
+        const board = boardWith(midGame, 4, 4, [W('pawn'), B('samurai')]);
+        const row = board[Math.floor(rand() * 9)]!;
+        const depth = Math.floor(rand() * 3);
+        if (depth === 0) delete board[Math.floor(rand() * 9)];
+        else if (depth === 1) delete row[Math.floor(rand() * 9)];
+        else delete board[4]![4]![Math.floor(rand() * 2)];
+        state.board = board;
       } else if (roll < 0.8 && isObject(state[field])) {
         (state[field] as Record<string, unknown>)[pick(['black', 'white', 'pawn'])] = pick(values);
       } else {

@@ -110,20 +110,31 @@ type Parsed<T> =
 
 const fail = (error: PositionError): Parsed<never> => ({ ok: false, error });
 
+/**
+ * A dense copy of `value`, or `undefined` if it is not an array. Holes in a
+ * sparse array become `undefined`, which the element checks then reject;
+ * `every` would skip them and later loops would read them and throw.
+ */
+function denseArray(value: unknown): unknown[] | undefined {
+  return Array.isArray(value) ? Array.from(value as unknown[]) : undefined;
+}
+
 /** Structural parse of `setup.stacks` into a board. Never throws. */
-function parseStacks(stacks: unknown): Parsed<Board> {
-  if (stacks === undefined) return { ok: true, value: createEmptyBoard() };
-  if (!Array.isArray(stacks)) return fail(PositionError.MALFORMED);
+function parseStacks(value: unknown): Parsed<Board> {
+  if (value === undefined) return { ok: true, value: createEmptyBoard() };
+  const stacks = denseArray(value);
+  if (!stacks) return fail(PositionError.MALFORMED);
   let board = createEmptyBoard();
   const seen = new Set<string>();
-  for (const entry of stacks as unknown[]) {
+  for (const entry of stacks) {
     if (!isRecord(entry)) return fail(PositionError.MALFORMED);
-    const { square, pieces } = entry;
+    const { square } = entry;
     if (!isValidSquare(square)) return fail(PositionError.INVALID_SQUARE);
     const key = `${square.file},${square.rank}`;
     if (seen.has(key)) return fail(PositionError.DUPLICATE_SQUARE);
     seen.add(key);
-    if (!Array.isArray(pieces) || !pieces.every(isPiece)) return fail(PositionError.INVALID_PIECE);
+    const pieces = denseArray(entry.pieces);
+    if (!pieces?.every(isPiece)) return fail(PositionError.INVALID_PIECE);
     board = setStack(
       board,
       square,
@@ -309,17 +320,22 @@ const END_REASONS: Readonly<Record<GameEndReason, boolean>> = {
   agreement: false,
 };
 
-/** A full `board[rank][file]` grid of piece arrays. Never throws. */
-function parseBoard(board: unknown): Parsed<Board> {
-  const isGrid = (value: unknown): value is unknown[] =>
-    Array.isArray(value) && value.length === BOARD_SIZE;
-  if (!isGrid(board) || !board.every(isGrid)) return fail(PositionError.MALFORMED);
-  const rows = board as unknown[][];
-  if (!rows.every((row) => row.every((stack) => Array.isArray(stack)))) {
+/** A full `board[rank][file]` grid of piece arrays, as a dense copy. Never throws. */
+function parseBoard(value: unknown): Parsed<Board> {
+  const grid = (v: unknown): unknown[] | undefined => {
+    const arr = denseArray(v);
+    return arr?.length === BOARD_SIZE ? arr : undefined;
+  };
+  const rows = grid(value)?.map(grid);
+  if (!rows?.every((row) => row !== undefined)) return fail(PositionError.MALFORMED);
+  const cells = rows.map((row) => row.map(denseArray));
+  if (!cells.every((row) => row.every((stack) => stack !== undefined))) {
     return fail(PositionError.MALFORMED);
   }
-  const stacks = rows.flat() as unknown[][];
-  if (!stacks.every((stack) => stack.every(isPiece))) return fail(PositionError.INVALID_PIECE);
+  const board = cells as unknown[][][];
+  if (!board.every((row) => row.every((stack) => stack.every(isPiece)))) {
+    return fail(PositionError.INVALID_PIECE);
+  }
   return { ok: true, value: board as Board };
 }
 
@@ -348,9 +364,10 @@ const parseFlag = (value: unknown): Parsed<boolean> =>
   typeof value === 'boolean' ? { ok: true, value } : fail(PositionError.MALFORMED);
 
 function parseCaptured(value: unknown): Parsed<readonly PieceKind[]> {
-  if (!Array.isArray(value)) return fail(PositionError.MALFORMED);
-  if (!value.every(isPieceKind)) return fail(PositionError.INVALID_PIECE);
-  return { ok: true, value: value as PieceKind[] };
+  const captured = denseArray(value);
+  if (!captured) return fail(PositionError.MALFORMED);
+  if (!captured.every(isPieceKind)) return fail(PositionError.INVALID_PIECE);
+  return { ok: true, value: captured as PieceKind[] };
 }
 
 function resultError(phase: GamePhase, result: unknown): PositionError | null {
