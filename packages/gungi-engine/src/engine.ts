@@ -4,6 +4,11 @@
  * `applyMove` is the single authoritative entry point. It never throws for
  * rule violations; it returns `{ ok: false, error }` and leaves the input
  * state untouched.
+ *
+ * Every function here assumes a state that keeps the §12.1 invariants (as
+ * produced by `createInitialState`, `createPosition` or `applyMove`). On a
+ * corrupt state they may give wrong answers or throw programmer errors, so a
+ * state restored from storage or the network must pass `stateError` first.
  */
 
 import { getStack, topPiece } from './board';
@@ -153,7 +158,13 @@ function applyGameMove(state: GameState, move: GameMove): MoveResult {
   return { ok: true, state: conclude(next) };
 }
 
-/** Applies any move. Returns the next state or a rule-violation code. */
+/**
+ * Applies any move. Returns the next state or a rule-violation code.
+ *
+ * The move may be untrusted input; the state may not. It must keep the §12.1
+ * invariants: on a corrupt state (e.g. restored from JSON without passing
+ * `stateError`) this may throw instead of returning an error code.
+ */
 export function applyMove(state: GameState, move: Move): MoveResult {
   if (state.phase === 'finished') return { ok: false, error: MoveError.GAME_FINISHED };
   if (!isWellFormed(move)) return { ok: false, error: MoveError.INVALID_MOVE };
@@ -176,7 +187,10 @@ export function applyMove(state: GameState, move: Move): MoveResult {
   }
 }
 
-/** `null` if the move is legal, otherwise the reason it is not. */
+/**
+ * `null` if the move is legal, otherwise the reason it is not. Same state
+ * precondition as `applyMove`.
+ */
 export function validateMove(state: GameState, move: Move): MoveError | null {
   const result = applyMove(state, move);
   return result.ok ? null : result.error;
@@ -185,7 +199,11 @@ export function validateMove(state: GameState, move: Move): MoveError | null {
 /**
  * Every legal move for the side to move (placement or play phase). Terminal
  * actions (`resign`, `timeout`, `agreeDraw`) are always available and are not
- * listed.
+ * listed. An empty list on an unfinished state means mate or stalemate that
+ * has not been concluded (possible for `createPosition`, §12.1).
+ *
+ * Same state precondition as `applyMove`: it may throw on a state that breaks
+ * the §12.1 invariants, so check restored states with `stateError` first.
  */
 export function legalMoves(state: GameState): Move[] {
   return legalGameMoves(state);
