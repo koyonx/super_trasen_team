@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { getStack, setStack } from './board';
+import { getStack } from './board';
 import { handTotal } from './pieces';
-import { ARMY_LIMIT, armySize, hasPawnOnFile } from './placing';
 import {
   createInitialState,
   executePlacementMove,
@@ -125,10 +124,9 @@ describe('§9.2 place', () => {
     );
   });
 
-  it('§4.5 a fortress may only be placed on an empty square', () => {
+  it('§4.5 a fortress may be placed onto a stack like any other piece', () => {
     const s = run(withMarshals(), place('black', 'general', 0, 0), place('white', 'general', 0, 8));
-    expect(errorOf(s, place('black', 'fortress', 0, 0))).toBe(MoveError.FORTRESS_CANNOT_STACK);
-    expect(errorOf(s, place('black', 'fortress', 1, 0))).toBeNull();
+    expect(errorOf(s, place('black', 'fortress', 0, 0))).toBeNull();
   });
 
   it('§4.5 pieces may be placed onto a fortress', () => {
@@ -136,31 +134,10 @@ describe('§9.2 place', () => {
     expect(errorOf(s, place('black', 'general', 0, 0))).toBeNull();
   });
 
-  it('§8.3 forbids a second own pawn on the same file, at any rank or tier', () => {
+  it('§8.4 several own pawns may share a file, stacked or not', () => {
     const s = run(withMarshals(), place('black', 'pawn', 2, 2), place('white', 'pawn', 3, 6));
-    expect(errorOf(s, place('black', 'pawn', 2, 0))).toBe(MoveError.PAWN_FILE_OCCUPIED);
-    expect(errorOf(s, place('black', 'pawn', 2, 2))).toBe(MoveError.PAWN_FILE_OCCUPIED);
-    // An enemy pawn on the file does not count.
-    expect(errorOf(s, place('black', 'pawn', 3, 0))).toBeNull();
-    const buried = run(s, place('black', 'general', 2, 2), place('white', 'pawn', 5, 6));
-    expect(errorOf(buried, place('black', 'pawn', 2, 1))).toBe(MoveError.PAWN_FILE_OCCUPIED);
-  });
-
-  it('§3.3 rejects placement once 26 own pieces are on the board', () => {
-    let s = withMarshals();
-    let board = s.board;
-    let n = 1;
-    for (let rank = 0; rank <= 2 && n < ARMY_LIMIT; rank++) {
-      for (let file = 0; file < 9 && n < ARMY_LIMIT; file++) {
-        if (rank === 0 && file === 4) continue;
-        board = setStack(board, { file, rank }, [{ kind: 'general', owner: 'black' }]);
-        n++;
-      }
-    }
-    s = { ...s, board };
-    expect(armySize(s.board, 'black')).toBe(ARMY_LIMIT);
-    expect(errorOf(s, place('black', 'general', 8, 2))).toBe(MoveError.ARMY_LIMIT);
-    expect(placementMoves(s)).toEqual([finish('black')]);
+    expect(errorOf(s, place('black', 'pawn', 2, 0))).toBeNull();
+    expect(errorOf(s, place('black', 'pawn', 2, 2))).toBeNull();
   });
 
   it('rejects placement during play', () => {
@@ -237,36 +214,13 @@ describe('§9 placementMoves', () => {
     const s = run(withMarshals(), place('black', 'pawn', 3, 1), place('white', 'pawn', 3, 7));
     const moves = placementMoves(s);
     for (const m of moves) expect(errorOf(s, m)).toBeNull();
-    expect(moves.some((m) => m.type === 'place' && m.kind === 'pawn' && m.to.file === 3)).toBe(
-      false,
-    );
     const onPawn = moves.filter((m) => m.type === 'place' && m.to.file === 3 && m.to.rank === 1);
-    expect(onPawn.length).toBeGreaterThan(0);
-    expect(onPawn.some((m) => m.type === 'place' && m.kind === 'fortress')).toBe(false);
+    expect(onPawn).toContainEqual(place('black', 'pawn', 3, 1));
+    expect(onPawn).toContainEqual(place('black', 'fortress', 3, 1));
+    expect(moves.some((m) => m.type === 'place' && m.to.file === 4 && m.to.rank === 0)).toBe(false);
   });
 
   it('is empty outside the placement phase', () => {
     expect(placementMoves(run(withMarshals(), finish('black'), finish('white')))).toEqual([]);
-  });
-});
-
-describe('§8.3 placing helpers', () => {
-  it('hasPawnOnFile looks at every rank and tier of the file for the given side', () => {
-    const board = setStack(withMarshals().board, { file: 6, rank: 5 }, [
-      { kind: 'pawn', owner: 'white' },
-      { kind: 'general', owner: 'black' },
-    ]);
-    expect(hasPawnOnFile(board, 'white', 6)).toBe(true);
-    expect(hasPawnOnFile(board, 'black', 6)).toBe(false);
-    expect(hasPawnOnFile(board, 'white', 5)).toBe(false);
-  });
-
-  it('armySize counts buried pieces', () => {
-    const board = setStack(withMarshals().board, { file: 6, rank: 5 }, [
-      { kind: 'pawn', owner: 'white' },
-      { kind: 'general', owner: 'black' },
-    ]);
-    expect(armySize(board, 'white')).toBe(2);
-    expect(armySize(board, 'black')).toBe(2);
   });
 });

@@ -40,7 +40,6 @@ export { PIECE_GLYPHS, ROSTER, opponent } from './pieces';
 export { getStack, topPiece, isInDropZone, isInTerritory } from './board';
 export { MOVE_RULES, reachableSquares } from './movement';
 export type { Direction, MoveRule, TieredRules } from './movement';
-export { ARMY_LIMIT } from './placing';
 export { createInitialState } from './setup';
 export {
   InvalidPositionError,

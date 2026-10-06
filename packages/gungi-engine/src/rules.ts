@@ -18,7 +18,7 @@ import {
 } from './board';
 import { reachableSquares } from './movement';
 import { opponent } from './pieces';
-import type { Board, BoardMove, GameState, Piece, PlayerSide, Square, Stack } from './types';
+import type { Board, BoardMove, GameState, PlayerSide, Square, Stack } from './types';
 import { MoveError } from './types';
 
 function canReach(board: Board, from: Square, to: Square): boolean {
@@ -28,9 +28,8 @@ function canReach(board: Board, from: Square, to: Square): boolean {
   return reachableSquares(board, from, piece, stack.length).some((sq) => sameSquare(sq, to));
 }
 
-/** §6.3 / §4.4 / §4.5 why `piece` may not be stacked onto `target`, if at all. */
-export function stackError(piece: Piece, target: Stack): MoveError | null {
-  if (piece.kind === 'fortress') return MoveError.FORTRESS_CANNOT_STACK;
+/** §6.3 / §4.4 why a piece may not be stacked onto `target`, if at all. */
+export function stackError(target: Stack): MoveError | null {
   if (topPiece(target)?.kind === 'marshal') return MoveError.CANNOT_STACK_ON_MARSHAL;
   if (target.length >= MAX_STACK_HEIGHT) return MoveError.STACK_FULL;
   return null;
@@ -55,7 +54,7 @@ export function validateBoardMove(state: GameState, move: BoardMove): MoveError 
   // §6.2 there is no height condition for captures or stacks.
   if (move.type === 'capture')
     return top.owner === move.player ? MoveError.CANNOT_CAPTURE_OWN : null;
-  return stackError(piece, target);
+  return stackError(target);
 }
 
 /** Applies a pseudo-legal board move. Caller must have validated it. */
@@ -112,7 +111,7 @@ export function boardMoves(state: GameState, side: PlayerSide): BoardMove[] {
         moves.push({ type: 'move', player: side, from, to });
         continue;
       }
-      if (stackError(piece, target) === null) moves.push({ type: 'stack', player: side, from, to });
+      if (stackError(target) === null) moves.push({ type: 'stack', player: side, from, to });
       if (top.owner !== side) moves.push({ type: 'capture', player: side, from, to });
     }
   }

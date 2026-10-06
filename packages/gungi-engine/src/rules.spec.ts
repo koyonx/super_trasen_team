@@ -171,16 +171,12 @@ describe('§6.3 stack (ツケ)', () => {
     expect(getStack(next.board, sq(4, 5))).toEqual([B('pawn'), B('marshal')]);
   });
 
-  it('§4.5 a fortress may not stack onto any piece', () => {
+  it('§4.5 a fortress may stack onto own and enemy pieces', () => {
     const s = createPosition({
       stacks: [...KINGS, at(4, 4, B('fortress')), at(4, 5, B('pawn')), at(5, 5, W('pawn'))],
     });
-    expect(validateBoardMove(s, mv('stack', sq(4, 4), sq(4, 5)))).toBe(
-      MoveError.FORTRESS_CANNOT_STACK,
-    );
-    expect(validateBoardMove(s, mv('stack', sq(4, 4), sq(5, 5)))).toBe(
-      MoveError.FORTRESS_CANNOT_STACK,
-    );
+    expect(validateBoardMove(s, mv('stack', sq(4, 4), sq(4, 5)))).toBeNull();
+    expect(validateBoardMove(s, mv('stack', sq(4, 4), sq(5, 5)))).toBeNull();
     expect(validateBoardMove(s, mv('capture', sq(4, 4), sq(5, 5)))).toBeNull();
   });
 
@@ -271,7 +267,6 @@ describe('§6.4 capture', () => {
   });
 
   it('§4.5 a fortress reached by capture may be stacked on, and may climb to tier 3', () => {
-    // A tier-2 black fortress is reachable as shown above; white then stacks on it.
     const s = createPosition({
       stacks: [
         ...KINGS,
@@ -285,10 +280,8 @@ describe('§6.4 capture', () => {
       MoveError.STACK_FULL,
     );
     const black = { ...s, turn: 'black' as const };
-    // The second fortress still cannot stack, but its capture lands on tier 3.
-    expect(validateBoardMove(black, mv('stack', sq(4, 3), sq(4, 4)))).toBe(
-      MoveError.FORTRESS_CANNOT_STACK,
-    );
+    // The full stack cannot be stacked on, but a capture lands on tier 3.
+    expect(validateBoardMove(black, mv('stack', sq(4, 3), sq(4, 4)))).toBe(MoveError.STACK_FULL);
     const next = play(black, mv('capture', sq(4, 3), sq(4, 4)));
     expect(getStack(next.board, sq(4, 4))).toEqual([W('pawn'), B('fortress'), B('fortress')]);
     expect(getStack(next.board, sq(4, 3))).toEqual([]);
@@ -372,14 +365,14 @@ describe('§6 boardMoves generation', () => {
     expect(toMarshal).toEqual([mv('capture', sq(4, 6), sq(4, 2), 'white')]);
   });
 
-  it('offers only captures for a fortress', () => {
+  it('offers a fortress both stack and capture against an enemy piece', () => {
     const s = createPosition({
-      stacks: [...KINGS, at(4, 4, B('fortress')), at(4, 5, W('samurai')), at(3, 5, W('pawn'))],
+      stacks: [...KINGS, at(4, 4, B('fortress')), at(4, 5, W('samurai')), at(3, 5, B('pawn'))],
     });
     const fromFortress = boardMoves(s, 'black').filter((m) => m.from.file === 4);
-    expect(fromFortress.filter((m) => m.type === 'stack')).toEqual([]);
+    expect(fromFortress).toContainEqual(mv('stack', sq(4, 4), sq(4, 5)));
     expect(fromFortress).toContainEqual(mv('capture', sq(4, 4), sq(4, 5)));
-    expect(fromFortress).toContainEqual(mv('capture', sq(4, 4), sq(3, 5)));
+    expect(fromFortress).toContainEqual(mv('stack', sq(4, 4), sq(3, 5)));
   });
 
   it('a lone tier-1 pawn in the middle has exactly one move', () => {

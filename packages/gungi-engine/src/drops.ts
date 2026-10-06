@@ -16,7 +16,7 @@ export function validateDrop(state: GameState, move: DropMove): MoveError | null
   if (state.hands[move.player][move.kind] <= 0) return MoveError.NOT_IN_HAND;
   if (!isInDropZone(move.player, move.to.rank)) return MoveError.OUTSIDE_DROP_ZONE;
   // §8.3 the top may be an enemy piece; no capture happens.
-  return placingError(state.board, move.player, move.kind, move.to);
+  return placingError(state.board, move.to);
 }
 
 /** Applies a validated drop. */
@@ -42,12 +42,8 @@ export function dropMoves(state: GameState, side: PlayerSide): DropMove[] {
   if (kinds.length === 0) return [];
   const moves: DropMove[] = [];
   for (const to of allSquares()) {
-    if (!isInDropZone(side, to.rank)) continue;
-    for (const kind of kinds) {
-      if (placingError(state.board, side, kind, to) === null) {
-        moves.push({ type: 'drop', player: side, kind, to });
-      }
-    }
+    if (!isInDropZone(side, to.rank) || placingError(state.board, to) !== null) continue;
+    for (const kind of kinds) moves.push({ type: 'drop', player: side, kind, to });
   }
   return moves;
 }

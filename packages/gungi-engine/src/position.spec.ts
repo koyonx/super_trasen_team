@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { applyMove, inCheck, isGameOver, legalMoves } from './engine';
-import { ARMY_LIMIT } from './placing';
 import type { PositionSetup } from './position';
 import {
   InvalidPositionError,
@@ -38,7 +37,7 @@ describe('§12.1 createPosition invariants', () => {
     expect(createPosition(setup).turn).toBe('white');
   });
 
-  it('§4.5 accepts a fortress above tier 1 (reachable by capture)', () => {
+  it('§4.5 accepts a fortress above tier 1', () => {
     const setup = { stacks: [...KINGS, at(4, 5, W('pawn'), B('fortress'), W('general'))] };
     expect(positionError(setup)).toBeNull();
   });
@@ -92,8 +91,7 @@ describe('§12.1 createPosition invariants', () => {
     expect(positionError({ stacks: [KINGS[0]!, at(8, 8, B('pawn'), W('marshal'))] })).toBeNull();
   });
 
-  it('§3.3 rejects more than 26 own pieces on the board', () => {
-    // Marshal + 26 others, all within the §3.1 roster.
+  it('§3.2 accepts any number of own pieces on the board', () => {
     const kinds: PieceKind[] = [
       ...Array<PieceKind>(6).fill('general'),
       ...Array<PieceKind>(4).fill('lieutenant'),
@@ -103,15 +101,11 @@ describe('§12.1 createPosition invariants', () => {
       'samurai',
       'knight',
     ];
-    expect(kinds.length).toBe(ARMY_LIMIT);
-    const armyOf = (pieces: PieceKind[]) =>
-      Array.from({ length: Math.ceil(pieces.length / 3) }, (_, i) =>
-        at(i, 3, ...pieces.slice(i * 3, i * 3 + 3).map(B)),
-      );
+    const army = Array.from({ length: Math.ceil(kinds.length / 3) }, (_, i) =>
+      at(i, 3, ...kinds.slice(i * 3, i * 3 + 3).map(B)),
+    );
     const base = [at(4, 0, B('marshal')), at(0, 8, W('marshal'))];
-    expect(positionError({ stacks: [...base, ...armyOf(kinds.slice(1))] })).toBeNull();
-    const army = armyOf(kinds);
-    expectRejected({ stacks: [...base, ...army] }, PositionError.ARMY_LIMIT);
+    expect(positionError({ stacks: [...base, ...army] })).toBeNull();
   });
 
   it('§3.1 rejects more pieces of a kind than the roster holds', () => {

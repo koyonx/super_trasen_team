@@ -1,7 +1,6 @@
 import { BOARD_SIZE, MAX_STACK_HEIGHT } from '@gungi/shared';
 import { allSquares, createEmptyBoard, getStack, isValidSquare, setStack } from './board';
 import { PIECE_GLYPHS, ROSTER, emptyHand, isPieceKind, opponent } from './pieces';
-import { ARMY_LIMIT } from './placing';
 import { isInCheck } from './rules';
 import type {
   Board,
@@ -62,7 +61,6 @@ export const PositionError = {
   STACK_TOO_HIGH: 'STACK_TOO_HIGH',
   MARSHAL_COUNT: 'MARSHAL_COUNT',
   MARSHAL_NOT_ON_TOP: 'MARSHAL_NOT_ON_TOP',
-  ARMY_LIMIT: 'ARMY_LIMIT',
   ROSTER_EXCEEDED: 'ROSTER_EXCEEDED',
   INVALID_COUNT: 'INVALID_COUNT',
   INVALID_TURN: 'INVALID_TURN',
@@ -188,7 +186,7 @@ function countOnBoard(board: Board, side: PlayerSide, kind?: PieceKind): number 
 }
 
 /**
- * §3.1 / §3.3 / §9.3 material invariants. `captured` lists what each side
+ * §3.1 / §9.3 material invariants. `captured` lists what each side
  * has taken; those pieces still count against their owner's roster.
  * `marshalRequired` tells whether the side must have its marshal on the
  * board (always in play; in placement once it has placed anything).
@@ -204,7 +202,6 @@ function materialError(
     if (marshals > 1 || (marshals === 0 && marshalRequired(side))) {
       return PositionError.MARSHAL_COUNT;
     }
-    if (countOnBoard(board, side) > ARMY_LIMIT) return PositionError.ARMY_LIMIT;
     const lost = captured[opponent(side)];
     for (const kind of PIECE_KINDS) {
       const total =
@@ -270,8 +267,7 @@ function parseSetup(setup: unknown): Parsed<ParsedSetup> {
  * `null`. Never throws, whatever the input (it may come straight from JSON).
  * Checks only invariants every legal game keeps: the shape of the setup,
  * square validity, stack height, one marshal per side on top of its stack,
- * the army limit, the roster and that the side not to move is not in check.
- * A fortress above tier 1 is allowed (§4.5, reached by capture).
+ * the roster and that the side not to move is not in check.
  *
  * Not checked: a quiet-ply counter above `QUIET_PLY_LIMIT` (the next quiet
  * move draws), mate or stalemate (returned unconcluded; see `legalMoves`)

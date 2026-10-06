@@ -9,7 +9,6 @@ import {
   validateMove,
 } from './engine';
 import { handTotal, opponent } from './pieces';
-import { ARMY_LIMIT } from './placing';
 import { createPosition, positionKey, stateError } from './position';
 import { isInCheck } from './rules';
 import { createInitialState } from './setup';
@@ -234,14 +233,14 @@ describe('§11.2 checkmate', () => {
     expect(legalMoves(next)).toEqual([drop(1), drop(2), drop(3), drop(4)]);
   });
 
-  it('§8.3 the pawn file rule can leave a check unblockable', () => {
+  it('§8.4 an own pawn on the file does not stop a blocking pawn drop', () => {
     const s = createPosition({
       stacks: [...MATE_NET, at(0, 7, B('pawn'))],
       hands: { black: { pawn: 1 } },
       turn: 'white',
     });
     const next = play(s, MATING_MOVE);
-    expect(next.result).toEqual({ winner: 'white', reason: 'checkmate' });
+    expect(next.result).toBeNull();
   });
 
   it('§8.4 a pawn drop may deliver mate', () => {
@@ -623,15 +622,12 @@ function checkInvariants(state: GameState): void {
     expect(
       piecesOf(state, side) + handTotal(state.hands[side]) + state.captured[opponent(side)].length,
     ).toBe(38);
-    // §3.3 at most 26 own pieces on the board.
-    expect(piecesOf(state, side)).toBeLessThanOrEqual(ARMY_LIMIT);
   }
   for (const s of allSquares()) {
     const stack = getStack(state.board, s);
     // §4.1 no stack exceeds 3.
     expect(stack.length).toBeLessThanOrEqual(3);
-    // §4.4 nothing sits on a marshal (§6.4 capture-advance included). A
-    // fortress may sit above tier 1 after capturing (§4.5), so no check there.
+    // §4.4 nothing sits on a marshal (§6.4 capture-advance included).
     stack.slice(0, -1).forEach((p) => expect(p.kind).not.toBe('marshal'));
   }
   // §11.4 the game ends as soon as the counter passes the limit.

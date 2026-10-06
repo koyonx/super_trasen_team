@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { getStack, isInDropZone, setStack } from './board';
+import { getStack, isInDropZone } from './board';
 import { dropMoves, executeDrop, validateDrop } from './drops';
-import { ARMY_LIMIT } from './placing';
 import { createPosition } from './position';
 import { B, W, at, sq } from './test-helpers';
 import type { DropMove, GameState, PieceKind, PlayerSide } from './types';
@@ -118,41 +117,15 @@ describe('§8.3 drop targets', () => {
     expect(validateDrop(s, drop('general', 0, 4))).toBe(MoveError.STACK_FULL);
   });
 
-  it('§4.5 a fortress may only be dropped on an empty square', () => {
-    expect(validateDrop(base(), drop('fortress', 0, 4))).toBe(MoveError.FORTRESS_CANNOT_STACK);
-    expect(validateDrop(base(), drop('fortress', 1, 4))).toBeNull();
+  it('§4.5 a fortress may be dropped onto a stack like any other piece', () => {
+    const next = apply(base(), drop('fortress', 0, 4));
+    expect(getStack(next.board, sq(0, 4))).toEqual([B('pawn'), B('fortress')]);
   });
 
-  it('forbids a pawn on a file that already holds an own pawn (any rank or tier)', () => {
-    expect(validateDrop(base(), drop('pawn', 0, 1))).toBe(MoveError.PAWN_FILE_OCCUPIED);
-    expect(validateDrop(base(), drop('pawn', 0, 4))).toBe(MoveError.PAWN_FILE_OCCUPIED);
-    const buried = createPosition({
-      stacks: [at(4, 0, B('marshal')), at(4, 8, W('marshal')), at(6, 7, B('pawn'), W('general'))],
-      hands: { black: { pawn: 1 } },
-    });
-    expect(validateDrop(buried, drop('pawn', 6, 1))).toBe(MoveError.PAWN_FILE_OCCUPIED);
-    expect(validateDrop(buried, drop('pawn', 5, 1))).toBeNull();
-  });
-
-  it('an enemy pawn on the file does not block', () => {
-    const s = createPosition({
-      stacks: [at(4, 0, B('marshal')), at(4, 8, W('marshal')), at(2, 6, W('pawn'))],
-      hands: { black: { pawn: 1 } },
-    });
-    expect(validateDrop(s, drop('pawn', 2, 1))).toBeNull();
-  });
-
-  it('§3.3 rejects drops while 26 own pieces are on the board', () => {
-    let s = base({ general: 1 });
-    let n = 2; // marshal + pawn
-    for (let rank = 1; rank <= 3 && n < ARMY_LIMIT; rank++) {
-      for (let file = 0; file < 9 && n < ARMY_LIMIT; file++) {
-        s = { ...s, board: setStack(s.board, sq(file, rank), [B('general')]) };
-        n++;
-      }
-    }
-    expect(validateDrop(s, drop('general', 8, 5))).toBe(MoveError.ARMY_LIMIT);
-    expect(dropMoves(s, 'black')).toEqual([]);
+  it('§8.4 a pawn may be dropped on a file that already holds an own pawn', () => {
+    expect(validateDrop(base(), drop('pawn', 0, 1))).toBeNull();
+    const next = apply(base(), drop('pawn', 0, 4));
+    expect(getStack(next.board, sq(0, 4))).toEqual([B('pawn'), B('pawn')]);
   });
 
   it('dropMoves only yields valid drops inside the zone', () => {
@@ -161,9 +134,10 @@ describe('§8.3 drop targets', () => {
     expect(moves.length).toBeGreaterThan(0);
     for (const m of moves) expect(validateDrop(s, m)).toBeNull();
     expect(moves.some((m) => m.to.rank > 5)).toBe(false);
-    expect(moves.some((m) => m.kind === 'pawn' && m.to.file === 0)).toBe(false);
+    expect(moves).toContainEqual(drop('pawn', 0, 3));
     expect(moves).toContainEqual(drop('general', 0, 4));
-    expect(moves).not.toContainEqual(drop('fortress', 0, 4));
+    expect(moves).toContainEqual(drop('fortress', 0, 4));
+    expect(moves).not.toContainEqual(drop('pawn', 4, 0));
   });
 
   it('dropMoves is empty with an empty hand', () => {
