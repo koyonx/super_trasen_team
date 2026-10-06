@@ -372,11 +372,16 @@ function resultError(phase: GamePhase, result: unknown): PositionError | null {
  * invariants of `positionError` and phase-aware material: in placement a
  * side has its marshal once it has placed anything (§9.2), in play both
  * marshals are on the board, and captured pieces count against the roster.
- * The side not to move may be in check only where a legal game allows it:
- * in placement once that side has finished (§9.5), and in play right after
- * placement (§11.1, white to move, no quiet ply and no capture yet). Like
- * `positionError` it accepts an unconcluded mate, stalemate or quiet-ply
- * counter past the limit, and it does not replay history.
+ * The side not to move may be in check in placement once that side has
+ * finished (§9.5), and in play at the position right after placement
+ * (§11.1). For the latter only necessary conditions are checked: white to
+ * move, no quiet ply, no capture yet, and `ply` either 0 (`createPosition`)
+ * or the pieces on the board plus 2 (one ply per `place`, one per
+ * `finishPlacement`). A forged state can still pass, e.g. one where only
+ * capture-free drops followed placement, since each drop also adds one ply
+ * and one piece and resets the quiet-ply counter. Like `positionError` it
+ * accepts an unconcluded mate, stalemate or quiet-ply counter past the
+ * limit, and it does not replay history.
  */
 export function stateError(state: unknown): PositionError | null {
   if (!isRecord(state)) return PositionError.MALFORMED;
@@ -419,7 +424,12 @@ export function stateError(state: unknown): PositionError | null {
   }
   if (gamePhase === 'play') {
     const noCaptures = captured.value.black.length === 0 && captured.value.white.length === 0;
-    return checkError(board.value, turn, state.quietPlies === 0 && noCaptures);
+    // `createPosition` starts at ply 0. `createInitialState` starts there too,
+    // and each `place` adds one ply and one piece, plus one ply per side for
+    // `finishPlacement`, so play starts at ply = pieces on board + 2.
+    const onBoard = countOnBoard(board.value, 'black') + countOnBoard(board.value, 'white');
+    const startPly = state.ply === 0 || state.ply === onBoard + 2;
+    return checkError(board.value, turn, state.quietPlies === 0 && noCaptures && startPly);
   }
   return null;
 }

@@ -485,6 +485,71 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
     ).toBeNull();
   });
 
+  describe('§11.1 the play-start exception needs a play-start ply count', () => {
+    const tower = [W('general'), W('general'), W('cannon')];
+    /** Black's marshal on (4, 2), checked by a white tier-3 cannon on (4, 6). */
+    const fromPosition = createPosition({
+      stacks: [at(4, 2, B('marshal')), at(4, 6, ...tower), KINGS[1]!],
+      hands: { white: { pawn: 3 } },
+      turn: 'white',
+    });
+
+    /** The same check reached by actual placement: black finishes first, white places on. */
+    function fromPlacement(): GameState {
+      let s = createInitialState();
+      const play = (move: Parameters<typeof applyMove>[1]) => {
+        const r = applyMove(s, move);
+        if (!r.ok) throw new Error(r.error);
+        s = r.state;
+      };
+      play({ type: 'place', player: 'black', kind: 'marshal', to: sq(4, 2) });
+      play({ type: 'place', player: 'white', kind: 'marshal', to: sq(8, 8) });
+      play({ type: 'finishPlacement', player: 'black' });
+      for (const kind of ['general', 'general', 'cannon'] as const) {
+        play({ type: 'place', player: 'white', kind, to: sq(4, 6) });
+      }
+      play({ type: 'finishPlacement', player: 'white' });
+      return s;
+    }
+
+    it('accepts both legitimate play-start shapes', () => {
+      expect(fromPosition.ply).toBe(0);
+      expect(stateError(restored(fromPosition))).toBeNull();
+      const placed = fromPlacement();
+      expect(placed).toMatchObject({ phase: 'play', turn: 'white', ply: 7, quietPlies: 0 });
+      expect(inCheck({ ...placed, turn: 'black' })).toBe(true);
+      // 5 pieces on the board + 2 finishPlacement plies.
+      expect(stateError(restored(placed))).toBeNull();
+    });
+
+    it('rejects a mid-game ply count with a reset quiet-ply counter', () => {
+      // A drop resets quietPlies, so quietPlies 0 alone does not mean play just started;
+      // white would otherwise be allowed to capture black's marshal.
+      expect(stateError(restored(fromPosition, { ply: 40, quietPlies: 0 }))).toBe(
+        PositionError.OPPONENT_IN_CHECK,
+      );
+      expect(stateError(restored(fromPlacement(), { ply: 8 }))).toBe(
+        PositionError.OPPONENT_IN_CHECK,
+      );
+    });
+
+    it('rejects drops played after quiet moves in a forged history', () => {
+      // Three white pawns dropped (3 plies, 3 pieces) after two quiet moves (2 plies):
+      // the counter is back to 0 but the ply count no longer matches the pieces.
+      const placed = fromPlacement();
+      let board = placed.board;
+      for (const file of [0, 1, 2]) board = boardWithPiece(board, file, 5, W('pawn'));
+      const forged = restored(placed, {
+        board,
+        hands: { ...placed.hands, white: { ...placed.hands.white, pawn: 6 } },
+        ply: placed.ply + 5,
+      });
+      expect(stateError(forged)).toBe(PositionError.OPPONENT_IN_CHECK);
+      // Necessary only: drops alone keep ply = pieces + 2, so the same board passes.
+      expect(stateError({ ...(forged as object), ply: placed.ply + 3 })).toBeNull();
+    });
+  });
+
   it.each([1, 2, 3])('seed %i: never throws on randomly corrupted states', (seed) => {
     const rand = rng(seed);
     const codes = new Set<unknown>([null, ...Object.values(PositionError)]);
@@ -509,6 +574,13 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
     }
   });
 });
+
+/** A copy of `board` with `piece` put on top of the stack at (file, rank). */
+function boardWithPiece(board: GameState['board'], file: number, rank: number, piece: Piece) {
+  return board.map((row, r) =>
+    row.map((stack, f) => (f === file && r === rank ? [...stack, piece] : stack)),
+  );
+}
 
 function isObject(value: unknown): value is object {
   return typeof value === 'object' && value !== null;
