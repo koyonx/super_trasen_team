@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { applyMove, inCheck, isGameOver, legalMoves } from './engine';
 import { ARMY_LIMIT } from './placing';
 import type { PositionSetup } from './position';
 import { InvalidPositionError, PositionError, createPosition, positionError } from './position';
@@ -132,6 +133,76 @@ describe('§12.1 createPosition invariants', () => {
     const s = createPosition({ stacks: [...KINGS, { square: sq(4, 4), pieces }] });
     pieces.push(B('pawn'));
     expect(s.board[4]![4]).toEqual([B('pawn')]);
+  });
+});
+
+describe('§12.1 the side not to move is never in check', () => {
+  /** A white tier-3 cannon on (4, 6) attacking down file 4 (§5.3). */
+  const whiteTower = at(4, 6, W('general'), W('general'), W('cannon'));
+  /** Black's marshal on (4, 2), in reach of `whiteTower`. */
+  const checked = [at(4, 2, B('marshal')), at(8, 8, W('marshal')), whiteTower];
+
+  it('rejects black to move with white in check', () => {
+    expectRejected(
+      { stacks: [at(0, 0, B('marshal')), at(4, 4, B('pawn')), at(4, 5, W('marshal'))] },
+      PositionError.OPPONENT_IN_CHECK,
+    );
+  });
+
+  it('§11.1 accepts white to move with black in check at the start of play', () => {
+    // Black finished placing first; white's last placement attacks black's marshal.
+    expect(positionError({ stacks: checked, turn: 'white' })).toBeNull();
+  });
+
+  it('rejects that position once a quiet ply has been played', () => {
+    expectRejected(
+      { stacks: checked, turn: 'white', quietPlies: 1 },
+      PositionError.OPPONENT_IN_CHECK,
+    );
+  });
+
+  it('rejects it when white is in check as well (§9.5 white could not have finished)', () => {
+    expectRejected(
+      {
+        stacks: [
+          at(4, 2, B('marshal')),
+          whiteTower,
+          at(0, 2, B('general'), B('general'), B('cannon')),
+          at(0, 7, W('marshal')),
+        ],
+        turn: 'white',
+      },
+      PositionError.OPPONENT_IN_CHECK,
+    );
+  });
+
+  it('accepts the side to move being in check', () => {
+    expect(positionError({ stacks: checked, turn: 'black' })).toBeNull();
+  });
+});
+
+describe('§12.1 what createPosition deliberately does not check', () => {
+  it('§11.4 accepts a quiet-ply counter above the limit; the next quiet move draws', () => {
+    const s = createPosition({ stacks: [...KINGS, at(4, 4, B('pawn'))], quietPlies: 60 });
+    expect(s.result).toBeNull();
+    const r = applyMove(s, { type: 'move', player: 'black', from: sq(4, 4), to: sq(4, 5) });
+    expect(r.ok && r.state.result).toEqual({ winner: null, reason: 'fiftyMoveRule' });
+  });
+
+  it('§11.2 returns a mated position unconcluded; the caller detects it', () => {
+    // Two white tier-3 cannons cover files 0 and 1 (§5.3).
+    const s = createPosition({
+      stacks: [
+        at(0, 0, B('marshal')),
+        at(0, 6, W('general'), W('general'), W('cannon')),
+        at(1, 6, W('general'), W('general'), W('cannon')),
+        at(8, 8, W('marshal')),
+      ],
+    });
+    expect(s.result).toBeNull();
+    expect(isGameOver(s)).toBe(false);
+    expect(legalMoves(s)).toEqual([]);
+    expect(inCheck(s)).toBe(true);
   });
 });
 

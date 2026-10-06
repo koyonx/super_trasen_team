@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allSquares, getStack } from './board';
+import { allSquares, getStack, setStack } from './board';
 import {
   QUIET_PLY_LIMIT,
   applyMove,
@@ -79,14 +79,17 @@ describe('§10.1 self-check is rejected', () => {
   });
 
   it('capturing the enemy marshal is rejected if it leaves the own marshal attacked', () => {
-    const s = createPosition({
-      stacks: [
-        at(4, 0, B('marshal')),
-        rook(0, 4, 'black'),
-        rook(4, 8, 'white'),
-        at(0, 8, W('marshal')),
-      ],
+    // §10.1 has no exception for taking the marshal. No legal game reaches
+    // this position (both marshals attacked, OPPONENT_IN_CHECK in §12.1), so
+    // the board is put together directly to pin down the rule code alone.
+    const base = createPosition({
+      stacks: [at(4, 0, B('marshal')), at(0, 8, W('marshal'))],
     });
+    const stacks = [rook(0, 4, 'black'), rook(4, 8, 'white')];
+    const s: GameState = {
+      ...base,
+      board: stacks.reduce((b, { square, pieces }) => setStack(b, square, pieces), base.board),
+    };
     expect(validateMove(s, mv('capture', [0, 4], [0, 8]))).toBe(MoveError.SELF_CHECK);
     expect(legalMoves(s).some((m) => m.type === 'capture')).toBe(false);
   });
@@ -148,24 +151,26 @@ describe('§10.1 self-check under §6.4 capture-advance', () => {
 });
 
 describe('§11.1 marshal capture', () => {
-  it('ends the game and records the capture', () => {
-    const s = createPosition({
-      stacks: [at(0, 0, B('marshal')), at(4, 4, B('pawn')), at(4, 5, W('marshal'))],
+  // Reachable only at the start of play: white's last placements left black
+  // in check (a tier-3 cannon on file 4) and white moves first (§9.4).
+  const opening = (...black: PieceKind[]) =>
+    createPosition({
+      stacks: [at(8, 8, W('marshal')), rook(4, 6, 'white'), at(4, 2, ...black.map(B))],
+      turn: 'white',
     });
-    const next = play(s, mv('capture', [4, 4], [4, 5]));
+
+  it('ends the game and records the capture', () => {
+    const next = play(opening('marshal'), mv('capture', [4, 6], [4, 2], 'white'));
     expect(isGameOver(next)).toBe(true);
     expect(next.phase).toBe('finished');
-    expect(next.result).toEqual({ winner: 'black', reason: 'marshalCaptured' });
-    expect(next.captured.black).toContain('marshal');
+    expect(next.result).toEqual({ winner: 'white', reason: 'marshalCaptured' });
+    expect(next.captured.white).toContain('marshal');
   });
 
   it('a marshal on top of a stack is captured and the capturer lands below', () => {
-    const s = createPosition({
-      stacks: [at(0, 0, B('marshal')), at(4, 4, B('pawn')), at(4, 5, W('pawn'), W('marshal'))],
-    });
-    const next = play(s, mv('capture', [4, 4], [4, 5]));
-    expect(getStack(next.board, sq(4, 5))).toEqual([W('pawn'), B('pawn')]);
-    expect(next.result).toEqual({ winner: 'black', reason: 'marshalCaptured' });
+    const next = play(opening('pawn', 'marshal'), mv('capture', [4, 6], [4, 2], 'white'));
+    expect(getStack(next.board, sq(4, 2))).toEqual([B('pawn'), W('cannon')]);
+    expect(next.result).toEqual({ winner: 'white', reason: 'marshalCaptured' });
   });
 });
 

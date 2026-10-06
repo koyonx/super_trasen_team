@@ -1,7 +1,8 @@
 import { MAX_STACK_HEIGHT } from '@gungi/shared';
 import { allSquares, createEmptyBoard, getStack, isValidSquare, setStack } from './board';
-import { PIECE_GLYPHS, ROSTER, emptyHand, isPieceKind } from './pieces';
+import { PIECE_GLYPHS, ROSTER, emptyHand, isPieceKind, opponent } from './pieces';
 import { ARMY_LIMIT } from './placing';
+import { isInCheck } from './rules';
 import type { Board, GameState, Hand, Piece, PieceKind, PlayerSide, Square } from './types';
 import { PIECE_KINDS } from './types';
 
@@ -55,6 +56,8 @@ export const PositionError = {
   ROSTER_EXCEEDED: 'ROSTER_EXCEEDED',
   INVALID_COUNT: 'INVALID_COUNT',
   INVALID_TURN: 'INVALID_TURN',
+  /** §10.1 the side not to move is in check, which no legal move leaves behind. */
+  OPPONENT_IN_CHECK: 'OPPONENT_IN_CHECK',
 } as const;
 
 export type PositionError = (typeof PositionError)[keyof typeof PositionError];
@@ -175,6 +178,21 @@ function materialError(
   return null;
 }
 
+/**
+ * §10.1 a move never leaves the mover's marshal attacked, so the side not to
+ * move is not in check. The one exception is the first move of the play
+ * phase (§11.1): black may finish placing first, after which white can place
+ * pieces that attack black's marshal and then finish itself. Such a position
+ * has white to move, white not in check (§9.5) and a fresh quiet-ply counter
+ * (`finishPlacement` resets it, §11.4); `atPlayStart` tells whether the
+ * position can be that one.
+ */
+function checkError(board: Board, turn: PlayerSide, atPlayStart: boolean): PositionError | null {
+  if (!isInCheck(board, opponent(turn))) return null;
+  if (atPlayStart && turn === 'white' && !isInCheck(board, turn)) return null;
+  return PositionError.OPPONENT_IN_CHECK;
+}
+
 interface ParsedSetup {
   readonly board: Board;
   readonly hands: Readonly<Record<PlayerSide, Hand>>;
@@ -192,7 +210,10 @@ function parseSetup(setup: unknown): Parsed<ParsedSetup> {
   if (!board.ok) return board;
   const hands = parseHands(setup.hands);
   if (!hands.ok) return hands;
-  const error = boardError(board.value) ?? materialError(board.value, hands.value);
+  const error =
+    boardError(board.value) ??
+    materialError(board.value, hands.value) ??
+    checkError(board.value, turn, quietPlies === 0);
   if (error) return fail(error);
   return { ok: true, value: { board: board.value, hands: hands.value, turn, quietPlies } };
 }
@@ -202,8 +223,12 @@ function parseSetup(setup: unknown): Parsed<ParsedSetup> {
  * `null`. Never throws, whatever the input (it may come straight from JSON).
  * Checks only invariants every legal game keeps: the shape of the setup,
  * square validity, stack height, one marshal per side on top of its stack,
- * the army limit and the roster. A fortress above tier 1 is allowed (§4.5,
- * reached by capture).
+ * the army limit, the roster and that the side not to move is not in check.
+ * A fortress above tier 1 is allowed (§4.5, reached by capture).
+ *
+ * Not checked: a quiet-ply counter above `QUIET_PLY_LIMIT` (the next quiet
+ * move draws), mate or stalemate (returned unconcluded; see `legalMoves`)
+ * and anything that depends on how the position was reached.
  */
 export function positionError(setup: PositionSetup): PositionError | null {
   const parsed = parseSetup(setup);

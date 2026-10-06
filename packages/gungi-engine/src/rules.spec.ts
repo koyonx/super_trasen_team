@@ -22,6 +22,21 @@ function play(state: GameState, move: BoardMove): GameState {
 /** Kings far apart so they do not interfere. */
 const KINGS = [at(0, 0, B('marshal')), at(8, 8, W('marshal'))];
 
+/**
+ * §11.1 the only reachable position where a marshal can be taken: play has
+ * just started and white's last placements left black in check. A white
+ * tier-3 cannon on (4, 6) bears down file 4 on whatever black has on (4, 2).
+ */
+const atPlayStart = (...black: Parameters<typeof B>[0][]) =>
+  createPosition({
+    stacks: [
+      at(8, 8, W('marshal')),
+      at(4, 6, W('general'), W('general'), W('cannon')),
+      at(4, 2, ...black.map(B)),
+    ],
+    turn: 'white',
+  });
+
 describe('§6.1 move to an empty square', () => {
   const s = createPosition({ stacks: [...KINGS, at(4, 4, B('pawn'))] });
 
@@ -144,10 +159,8 @@ describe('§6.3 stack (ツケ)', () => {
     expect(validateBoardMove(s, mv('stack', sq(4, 4), sq(4, 5)))).toBe(
       MoveError.CANNOT_STACK_ON_MARSHAL,
     );
-    const t = createPosition({
-      stacks: [at(0, 0, B('marshal')), at(4, 4, B('pawn')), at(4, 5, W('marshal'))],
-    });
-    expect(validateBoardMove(t, mv('stack', sq(4, 4), sq(4, 5)))).toBe(
+    const t = atPlayStart('marshal');
+    expect(validateBoardMove(t, mv('stack', sq(4, 6), sq(4, 2), 'white'))).toBe(
       MoveError.CANNOT_STACK_ON_MARSHAL,
     );
   });
@@ -282,12 +295,10 @@ describe('§6.4 capture', () => {
   });
 
   it('§4.4 capturing a marshal on top of a stack lands on what is below it', () => {
-    const s = createPosition({
-      stacks: [at(0, 0, B('marshal')), at(4, 4, B('pawn')), at(4, 5, W('pawn'), W('marshal'))],
-    });
-    const next = play(s, mv('capture', sq(4, 4), sq(4, 5)));
-    expect(getStack(next.board, sq(4, 5))).toEqual([W('pawn'), B('pawn')]);
-    expect(next.captured.black).toEqual(['marshal']);
+    const s = atPlayStart('pawn', 'marshal');
+    const next = play(s, mv('capture', sq(4, 6), sq(4, 2), 'white'));
+    expect(getStack(next.board, sq(4, 2))).toEqual([B('pawn'), W('cannon')]);
+    expect(next.captured.white).toEqual(['marshal']);
   });
 
   it('rejects capturing an own piece', () => {
@@ -354,14 +365,16 @@ describe('§6 boardMoves generation', () => {
     ]);
   });
 
-  it('offers only capture against an enemy marshal and for a fortress', () => {
+  it('offers only capture against an enemy marshal', () => {
+    const toMarshal = boardMoves(atPlayStart('marshal'), 'white').filter(
+      (m) => m.to.file === 4 && m.to.rank === 2,
+    );
+    expect(toMarshal).toEqual([mv('capture', sq(4, 6), sq(4, 2), 'white')]);
+  });
+
+  it('offers only captures for a fortress', () => {
     const s = createPosition({
-      stacks: [
-        at(0, 0, B('marshal')),
-        at(4, 4, B('fortress')),
-        at(4, 5, W('marshal')),
-        at(3, 5, W('pawn')),
-      ],
+      stacks: [...KINGS, at(4, 4, B('fortress')), at(4, 5, W('samurai')), at(3, 5, W('pawn'))],
     });
     const fromFortress = boardMoves(s, 'black').filter((m) => m.from.file === 4);
     expect(fromFortress.filter((m) => m.type === 'stack')).toEqual([]);
