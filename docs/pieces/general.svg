@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="384" height="384" viewBox="0 0 384 384" role="img">
+<title>大 (general)</title>
+<rect x="12" y="12" width="360" height="360" fill="#f2d8a7"/>
+<rect x="172" y="12" width="40" height="40" fill="#f4b6b0"/>
+<rect x="52" y="52" width="40" height="40" fill="#6cb33f"/>
+<rect x="172" y="52" width="40" height="40" fill="#f4b6b0"/>
+<rect x="292" y="52" width="40" height="40" fill="#6cb33f"/>
+<rect x="92" y="92" width="40" height="40" fill="#2b6cb0"/>
+<rect x="172" y="92" width="40" height="40" fill="#f4b6b0"/>
+<rect x="252" y="92" width="40" height="40" fill="#2b6cb0"/>
+<rect x="132" y="132" width="40" height="40" fill="#a6d8e8"/>
+<rect x="172" y="132" width="40" height="40" fill="#f4b6b0"/>
+<rect x="212" y="132" width="40" height="40" fill="#a6d8e8"/>
+<rect x="12" y="172" width="40" height="40" fill="#f4b6b0"/>
+<rect x="52" y="172" width="40" height="40" fill="#f4b6b0"/>
+<rect x="92" y="172" width="40" height="40" fill="#f4b6b0"/>
+<rect x="132" y="172" width="40" height="40" fill="#f4b6b0"/>
+<rect x="212" y="172" width="40" height="40" fill="#f4b6b0"/>
+<rect x="252" y="172" width="40" height="40" fill="#f4b6b0"/>
+<rect x="292" y="172" width="40" height="40" fill="#f4b6b0"/>
+<rect x="332" y="172" width="40" height="40" fill="#f4b6b0"/>
+<rect x="132" y="212" width="40" height="40" fill="#a6d8e8"/>
+<rect x="172" y="212" width="40" height="40" fill="#f4b6b0"/>
+<rect x="212" y="212" width="40" height="40" fill="#a6d8e8"/>
+<rect x="92" y="252" width="40" height="40" fill="#2b6cb0"/>
+<rect x="172" y="252" width="40" height="40" fill="#f4b6b0"/>
+<rect x="252" y="252" width="40" height="40" fill="#2b6cb0"/>
+<rect x="52" y="292" width="40" height="40" fill="#6cb33f"/>
+<rect x="172" y="292" width="40" height="40" fill="#f4b6b0"/>
+<rect x="292" y="292" width="40" height="40" fill="#6cb33f"/>
+<rect x="172" y="332" width="40" height="40" fill="#f4b6b0"/>
+<path d="M52 12V372M12 52H372M92 12V372M12 92H372M132 12V372M12 132H372M172 12V372M12 172H372M212 12V372M12 212H372M252 12V372M12 252H372M292 12V372M12 292H372M332 12V372M12 332H372" stroke="#5c4630" stroke-width="1" fill="none"/>
+<rect x="12" y="12" width="360" height="360" fill="none" stroke="#5c4630" stroke-width="2"/>
+<path d="M192 173L192 28" stroke="#d62828" stroke-width="3"/><path d="M192 17L198 28L186 28Z" fill="#d62828"/>
+<path d="M192 211L192 356" stroke="#d62828" stroke-width="3"/><path d="M192 367L186 356L198 356Z" fill="#d62828"/>
+<path d="M173 192L28 192" stroke="#d62828" stroke-width="3"/><path d="M17 192L28 186L28 198Z" fill="#d62828"/>
+<path d="M211 192L356 192" stroke="#d62828" stroke-width="3"/><path d="M367 192L356 198L356 186Z" fill="#d62828"/>
+<circle cx="192" cy="192" r="16" fill="#1f1f1f"/><text x="192" y="192" fill="#ffffff" font-family="'Hiragino Mincho ProN','Yu Mincho','Noto Serif CJK JP','Noto Serif JP',serif" font-size="20" font-weight="bold" text-anchor="middle" dominant-baseline="central">大</text>
+</svg>

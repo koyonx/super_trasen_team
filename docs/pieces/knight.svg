@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="384" height="384" viewBox="0 0 384 384" role="img">
+<title>馬 (knight)</title>
+<rect x="12" y="12" width="360" height="360" fill="#f2d8a7"/>
+<rect x="172" y="12" width="40" height="40" fill="#6cb33f"/>
+<rect x="172" y="52" width="40" height="40" fill="#2b6cb0"/>
+<rect x="172" y="92" width="40" height="40" fill="#a6d8e8"/>
+<rect x="172" y="132" width="40" height="40" fill="#a6d8e8"/>
+<rect x="52" y="172" width="40" height="40" fill="#6cb33f"/>
+<rect x="92" y="172" width="40" height="40" fill="#2b6cb0"/>
+<rect x="132" y="172" width="40" height="40" fill="#a6d8e8"/>
+<rect x="212" y="172" width="40" height="40" fill="#a6d8e8"/>
+<rect x="252" y="172" width="40" height="40" fill="#2b6cb0"/>
+<rect x="292" y="172" width="40" height="40" fill="#6cb33f"/>
+<rect x="172" y="212" width="40" height="40" fill="#a6d8e8"/>
+<rect x="172" y="252" width="40" height="40" fill="#a6d8e8"/>
+<rect x="172" y="292" width="40" height="40" fill="#2b6cb0"/>
+<rect x="172" y="332" width="40" height="40" fill="#6cb33f"/>
+<path d="M52 12V372M12 52H372M92 12V372M12 92H372M132 12V372M12 132H372M172 12V372M12 172H372M212 12V372M12 212H372M252 12V372M12 252H372M292 12V372M12 292H372M332 12V372M12 332H372" stroke="#5c4630" stroke-width="1" fill="none"/>
+<rect x="12" y="12" width="360" height="360" fill="none" stroke="#5c4630" stroke-width="2"/>
+<circle cx="192" cy="192" r="16" fill="#1f1f1f"/><text x="192" y="192" fill="#ffffff" font-family="'Hiragino Mincho ProN','Yu Mincho','Noto Serif CJK JP','Noto Serif JP',serif" font-size="20" font-weight="bold" text-anchor="middle" dominant-baseline="central">馬</text>
+</svg>
