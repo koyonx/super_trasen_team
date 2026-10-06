@@ -11,6 +11,7 @@ import {
 import { handTotal, opponent } from './pieces';
 import { ARMY_LIMIT } from './placing';
 import { createPosition, positionKey, stateError } from './position';
+import { isInCheck } from './rules';
 import { createInitialState } from './setup';
 import { B, W, at, rng, sq } from './test-helpers';
 import type { BoardMove, GameState, Move, PieceKind, PlayerSide } from './types';
@@ -147,6 +148,29 @@ describe('§10.1 self-check under §6.4 capture-advance', () => {
     const next = play(s, capture);
     expect(getStack(next.board, sq(4, 1))).toEqual([W('pawn'), B('marshal')]);
     expect(next.phase).toBe('play');
+  });
+
+  it('a capturer that covers a remaining enemy piece removes its attack', () => {
+    // Taking the tier-2 samurai uncovers a white general next to the marshal.
+    const s = createPosition({
+      stacks: [
+        at(4, 0, B('marshal')),
+        at(3, 0, B('general')),
+        at(4, 1, W('general'), W('samurai')),
+        at(8, 8, W('marshal')),
+      ],
+    });
+    expect(inCheck(s)).toBe(false);
+    const capture = mv('capture', [3, 0], [4, 1]);
+    // gungi.js moves(): the capturer stays on (3, 0), the general attacks (4, 0).
+    const stayPut = setStack(s.board, sq(4, 1), [W('general')]);
+    expect(isInCheck(stayPut, 'black')).toBe(true);
+    // Here the capturer lands on the general, which then has no reach (§4.2).
+    expect(validateMove(s, capture)).toBeNull();
+    expect(legalMoves(s)).toContainEqual(capture);
+    const next = play(s, capture);
+    expect(getStack(next.board, sq(4, 1))).toEqual([W('general'), B('general')]);
+    expect(inCheck({ ...next, turn: 'black' })).toBe(false);
   });
 });
 
