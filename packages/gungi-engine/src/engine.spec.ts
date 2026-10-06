@@ -1,15 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { allSquares, getStack, setStack } from './board';
-import {
-  QUIET_PLY_LIMIT,
-  applyMove,
-  inCheck,
-  isGameOver,
-  legalMoves,
-  validateMove,
-} from './engine';
+import { applyMove, inCheck, isGameOver, legalMoves, validateMove } from './engine';
 import { handTotal, opponent } from './pieces';
-import { createPosition, positionKey, stateError } from './position';
+import { createPosition, stateError } from './position';
+import { REPETITION_LIMIT, positionKey } from './repetition';
 import { createInitialState } from './setup';
 import { B, W, at, rng, sq } from './test-helpers';
 import type { BoardMove, GameState, Move, PieceKind, PlayerSide } from './types';
@@ -273,8 +267,9 @@ describe('§11.3 stalemate', () => {
   });
 });
 
-describe('§11.4 fifty-move rule', () => {
+describe('§11.4 fourfold repetition', () => {
   const KINGS_ONLY = [at(0, 0, B('marshal')), at(8, 8, W('marshal'))];
+  /** Four plies that bring the kings back to where they started. */
   const shuffle: Move[] = [
     mv('move', [0, 0], [0, 1]),
     mv('move', [8, 8], [8, 7], 'white'),
@@ -282,54 +277,75 @@ describe('§11.4 fifty-move rule', () => {
     mv('move', [8, 7], [8, 8], 'white'),
   ];
 
-  it('the 51st consecutive quiet ply draws', () => {
-    const s = createPosition({ stacks: KINGS_ONLY, quietPlies: QUIET_PLY_LIMIT - 1 });
-    const fiftieth = play(s, shuffle[0]!);
-    expect(fiftieth.quietPlies).toBe(QUIET_PLY_LIMIT);
-    expect(fiftieth.result).toBeNull();
-    const next = play(fiftieth, shuffle[1]!);
-    expect(next.result).toEqual({ winner: null, reason: 'fiftyMoveRule' });
+  it('the starting position counts as the first occurrence', () => {
+    const s = createPosition({ stacks: KINGS_ONLY });
+    expect(s.positionCounts).toEqual({ [positionKey(s)]: 1 });
   });
 
-  it('counts from the start of play', () => {
+  it('the fourth occurrence of a position ends the game without a winner', () => {
     let s = createPosition({ stacks: KINGS_ONLY });
-    for (let i = 0; i < 12; i++) s = play(s, ...shuffle);
-    expect(s.quietPlies).toBe(48);
-    s = play(s, shuffle[0]!, shuffle[1]!);
+    const start = positionKey(s);
+    s = play(s, ...shuffle, ...shuffle);
+    expect(s.positionCounts[start]).toBe(3);
+    s = play(s, ...shuffle.slice(0, 3));
     expect(s.result).toBeNull();
-    s = play(s, shuffle[2]!);
-    expect(s.result).toEqual({ winner: null, reason: 'fiftyMoveRule' });
-    expect(s.ply).toBe(51);
+    s = play(s, shuffle[3]!);
+    expect(s.positionCounts[start]).toBe(REPETITION_LIMIT);
+    expect(s.result).toEqual({ winner: null, reason: 'fourfoldRepetition' });
+    expect(s.ply).toBe(12);
+    expect(isGameOver(s)).toBe(true);
+    expect(stateError(JSON.parse(JSON.stringify(s)))).toBeNull();
   });
 
-  it('there is no repetition rule', () => {
+  it('counts every position, not only the starting one', () => {
     let s = createPosition({ stacks: KINGS_ONLY });
-    for (let i = 0; i < 5; i++) s = play(s, ...shuffle);
-    expect(s.result).toBeNull();
+    s = play(s, shuffle[0]!, shuffle[1]!, shuffle[2]!, shuffle[3]!, shuffle[0]!);
+    const afterFirst = positionKey(s);
+    expect(s.positionCounts[afterFirst]).toBe(2);
+    expect(Object.values(s.positionCounts).sort()).toEqual([1, 1, 2, 2]);
   });
 
-  it('a drop resets the counter', () => {
-    const s = createPosition({
-      stacks: KINGS_ONLY,
-      hands: { black: { general: 1 } },
-      quietPlies: QUIET_PLY_LIMIT,
-    });
-    const next = play(s, { type: 'drop', player: 'black', kind: 'general', to: sq(3, 0) });
-    expect(next.quietPlies).toBe(0);
+  it('the same board with the other side to move is a different position', () => {
+    const s = createPosition({ stacks: KINGS_ONLY });
+    expect(positionKey({ ...s, turn: 'white' })).not.toBe(positionKey(s));
+  });
+
+  it('a drop restarts the count', () => {
+    const s = createPosition({ stacks: KINGS_ONLY, hands: { black: { general: 1 } } });
+    const looped = play(s, ...shuffle, ...shuffle);
+    const next = play(looped, { type: 'drop', player: 'black', kind: 'general', to: sq(3, 0) });
+    expect(next.positionCounts).toEqual({ [positionKey(next)]: 1 });
     expect(next.result).toBeNull();
   });
 
-  it('a capture resets the counter', () => {
+  it('a capture restarts the count', () => {
     const s = createPosition({
       stacks: [...KINGS_ONLY, at(4, 4, B('pawn')), at(4, 5, W('pawn'))],
-      quietPlies: QUIET_PLY_LIMIT,
     });
-    expect(play(s, mv('capture', [4, 4], [4, 5])).quietPlies).toBe(0);
+    const next = play(s, mv('capture', [4, 4], [4, 5]));
+    expect(next.positionCounts).toEqual({ [positionKey(next)]: 1 });
   });
 
-  it('takes precedence over a simultaneous checkmate', () => {
-    const s = createPosition({ stacks: MATE_NET, turn: 'white', quietPlies: QUIET_PLY_LIMIT });
-    expect(play(s, MATING_MOVE).result).toEqual({ winner: null, reason: 'fiftyMoveRule' });
+  it('move and stack keep counting', () => {
+    const s = createPosition({
+      stacks: [...KINGS_ONLY, at(4, 4, B('pawn')), at(4, 5, W('pawn'))],
+    });
+    const next = play(s, mv('stack', [4, 4], [4, 5]));
+    expect(Object.keys(next.positionCounts)).toHaveLength(2);
+  });
+
+  it('positions repeat across a full game from placement', () => {
+    let s = play(
+      createInitialState(),
+      { type: 'place', player: 'black', kind: 'marshal', to: sq(0, 0) },
+      { type: 'place', player: 'white', kind: 'marshal', to: sq(8, 8) },
+      { type: 'finishPlacement', player: 'black' },
+      { type: 'finishPlacement', player: 'white' },
+    );
+    for (let i = 0; i < 2; i++) s = play(s, ...shuffle);
+    expect(s.result).toBeNull();
+    s = play(s, ...shuffle);
+    expect(s.result).toEqual({ winner: null, reason: 'fourfoldRepetition' });
   });
 });
 
@@ -338,7 +354,7 @@ describe('§12.1 state data', () => {
     const a = createPosition({ stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))] });
     const b = createPosition({
       stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))],
-      quietPlies: 9,
+      firstPlayer: 'white',
     });
     expect(positionKey(a)).toBe(positionKey(b));
     expect(positionKey({ ...a, turn: 'white' })).not.toBe(positionKey(a));
@@ -354,7 +370,7 @@ describe('§12.1 state data', () => {
     expect(s.phase).toBe('play');
     expect(s.turn).toBe('black');
     expect(s.firstPlayer).toBe('black');
-    expect(s.quietPlies).toBe(0);
+    expect(s.positionCounts).toEqual({ [positionKey(s)]: 1 });
     expect(JSON.parse(JSON.stringify(s))).toEqual(s);
   });
 });
@@ -682,10 +698,13 @@ function checkInvariants(state: GameState): void {
     // §4.4 nothing sits on a marshal (§6.4 capture-advance included).
     stack.slice(0, -1).forEach((p) => expect(p.kind).not.toBe('marshal'));
   }
-  // §11.4 the game ends as soon as the counter passes the limit.
-  expect(state.quietPlies).toBeLessThanOrEqual(QUIET_PLY_LIMIT + 1);
+  // §11.4 a position appears at most 3 times, unless the 4th just ended the game.
+  const counts = Object.values(state.positionCounts);
+  const repeated = state.result?.reason === 'fourfoldRepetition';
+  expect(Math.max(0, ...counts)).toBeLessThanOrEqual(repeated ? REPETITION_LIMIT : 3);
+  if (state.phase === 'play') expect(state.positionCounts[positionKey(state)]).toBeGreaterThan(0);
+  if (state.phase === 'placement') expect(counts).toEqual([]);
   if (state.phase !== 'finished') {
-    expect(state.quietPlies).toBeLessThanOrEqual(QUIET_PLY_LIMIT);
     // §10.1 the side that just moved is never left in check, except a first
     // player that has finished placing (§9.5). There is no exception in play.
     const waiting =

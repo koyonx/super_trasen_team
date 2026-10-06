@@ -40,10 +40,6 @@ describe('§8.1 drop basics', () => {
     expect(next.ply).toBe(1);
   });
 
-  it('§11.4 resets the quiet-ply counter', () => {
-    expect(apply({ ...base(), quietPlies: 30 }, drop('pawn', 2, 2)).quietPlies).toBe(0);
-  });
-
   it('does not mutate the input state', () => {
     const s = base();
     const snapshot = JSON.stringify(s);

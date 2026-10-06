@@ -14,6 +14,7 @@
 import { getStack, topPiece } from './board';
 import { dropMoves, executeDrop, validateDrop } from './drops';
 import { opponent } from './pieces';
+import { REPETITION_LIMIT, recordPosition, repetitions } from './repetition';
 import { boardMoves, executeBoardMove, isInCheck, validateBoardMove } from './rules';
 import type { PlacementMove } from './setup';
 import { executePlacementMove, placementMoves, validatePlacementMove } from './setup';
@@ -30,9 +31,6 @@ import { MoveError } from './types';
 
 /** Moves that change the board or the phase (everything but terminal actions). */
 type GameMove = PlacementMove | BoardMove | DropMove;
-
-/** §11.4 the game is drawn once more than this many quiet plies have been played. */
-export const QUIET_PLY_LIMIT = 50;
 
 const MOVE_TYPES: ReadonlySet<string> = new Set([
   'place',
@@ -129,19 +127,27 @@ function hasLegalMove(state: GameState): boolean {
 }
 
 /**
- * §11.2–§11.4 ends the game after a move: the fifty-move draw first (it takes
- * precedence over a simultaneous mate), then checkmate (loss) or stalemate
- * (draw) when the side to move has no legal move.
+ * §11.2–§11.4 ends the game after a move: checkmate (loss) or stalemate
+ * (draw) when the side to move has no legal move, otherwise the fourth
+ * occurrence of a position. Both never hold at once: a repeated position
+ * had legal moves the first time it appeared.
  */
 function conclude(state: GameState): GameState {
   if (state.phase === 'finished') return state;
-  if (state.quietPlies > QUIET_PLY_LIMIT) {
-    return finish(state, { winner: null, reason: 'fiftyMoveRule' });
+  if (!hasLegalMove(state)) {
+    return isInCheck(state.board, state.turn)
+      ? finish(state, { winner: opponent(state.turn), reason: 'checkmate' })
+      : finish(state, { winner: null, reason: 'stalemate' });
   }
-  if (hasLegalMove(state)) return state;
-  return isInCheck(state.board, state.turn)
-    ? finish(state, { winner: opponent(state.turn), reason: 'checkmate' })
-    : finish(state, { winner: null, reason: 'stalemate' });
+  if (state.phase === 'play' && repetitions(state) >= REPETITION_LIMIT) {
+    return finish(state, { winner: null, reason: 'fourfoldRepetition' });
+  }
+  return state;
+}
+
+/** §11.4 moves after which no earlier position can recur. */
+function isIrreversible(move: GameMove): boolean {
+  return move.type === 'capture' || move.type === 'drop';
 }
 
 function applyGameMove(state: GameState, move: GameMove): MoveResult {
@@ -152,7 +158,9 @@ function applyGameMove(state: GameState, move: GameMove): MoveResult {
   }
 
   const tookMarshal = capturesMarshal(state, move);
-  const next = execute(state, move);
+  const executed = execute(state, move);
+  // Placement moves count the play-start position themselves (§11.4).
+  const next = state.phase === 'play' ? recordPosition(executed, isIrreversible(move)) : executed;
   if (tookMarshal) {
     return { ok: true, state: finish(next, { winner: move.player, reason: 'marshalCaptured' }) };
   }

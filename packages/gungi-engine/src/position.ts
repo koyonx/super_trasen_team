@@ -1,11 +1,13 @@
 import { BOARD_SIZE, MAX_STACK_HEIGHT } from '@gungi/shared';
 import { allSquares, createEmptyBoard, getStack, isValidSquare, setStack } from './board';
-import { PIECE_GLYPHS, ROSTER, emptyHand, handTotal, isPieceKind, opponent } from './pieces';
+import { ROSTER, emptyHand, handTotal, isPieceKind, opponent } from './pieces';
+import { REPETITION_LIMIT, positionKey, recordPosition } from './repetition';
 import { isInCheck } from './rules';
 import type {
   Board,
   GameEndReason,
   GamePhase,
+  GameResult,
   GameState,
   Hand,
   Piece,
@@ -15,32 +17,6 @@ import type {
 } from './types';
 import { PIECE_KINDS } from './types';
 
-function handKey(hand: Hand): string {
-  return PIECE_KINDS.map((k) => hand[k]).join('');
-}
-
-/**
- * §12.1 canonical key identifying a position: board, both hands and side to
- * move. Black pieces are prefixed with `+`, white with `-`.
- *
- * Intended for kifu storage, analysis and AI transposition tables. The rules
- * themselves never use it: there is no repetition rule (§15), so two equal
- * keys mean nothing to `applyMove`.
- */
-export function positionKey(state: Pick<GameState, 'board' | 'hands' | 'turn'>): string {
-  const squares = allSquares().map((sq) =>
-    getStack(state.board, sq)
-      .map((p) => (p.owner === 'black' ? '+' : '-') + PIECE_GLYPHS[p.kind])
-      .join(''),
-  );
-  return [
-    squares.join('/'),
-    handKey(state.hands.black),
-    handKey(state.hands.white),
-    state.turn === 'black' ? 'b' : 'w',
-  ].join(' ');
-}
-
 export interface PositionSetup {
   /** Stacks to put on an otherwise empty board (pieces bottom to top). */
   readonly stacks?: readonly { readonly square: Square; readonly pieces: readonly Piece[] }[];
@@ -49,8 +25,6 @@ export interface PositionSetup {
   readonly turn?: PlayerSide;
   /** §9.1 the first player of the game (default black). Does not affect play-phase rules. */
   readonly firstPlayer?: PlayerSide;
-  /** §11.4 quiet-ply counter to start from (default 0). */
-  readonly quietPlies?: number;
 }
 
 /** §12.1 reasons `createPosition` rejects a setup and `stateError` rejects a state. */
@@ -72,6 +46,8 @@ export const PositionError = {
   INVALID_PHASE: 'INVALID_PHASE',
   /** `stateError` only: `result` missing, malformed or set outside the finished phase. */
   INVALID_RESULT: 'INVALID_RESULT',
+  /** `stateError` only: `positionCounts` contradicts the phase or the current position (§11.4). */
+  INVALID_HISTORY: 'INVALID_HISTORY',
 } as const;
 
 export type PositionError = (typeof PositionError)[keyof typeof PositionError];
@@ -238,15 +214,13 @@ interface ParsedSetup {
   readonly hands: Readonly<Record<PlayerSide, Hand>>;
   readonly turn: PlayerSide;
   readonly firstPlayer: PlayerSide;
-  readonly quietPlies: number;
 }
 
 /** Parses and validates a setup into fresh data. Never throws. */
 function parseSetup(setup: unknown): Parsed<ParsedSetup> {
   if (!isRecord(setup)) return fail(PositionError.MALFORMED);
-  const { turn = 'black', firstPlayer = 'black', quietPlies = 0 } = setup;
+  const { turn = 'black', firstPlayer = 'black' } = setup;
   if (!isSide(turn) || !isSide(firstPlayer)) return fail(PositionError.INVALID_TURN);
-  if (!isCount(quietPlies)) return fail(PositionError.INVALID_COUNT);
   const board = parseStacks(setup.stacks);
   if (!board.ok) return board;
   const hands = parseHands(setup.hands);
@@ -259,7 +233,7 @@ function parseSetup(setup: unknown): Parsed<ParsedSetup> {
   if (error) return fail(error);
   return {
     ok: true,
-    value: { board: board.value, hands: hands.value, turn, firstPlayer, quietPlies },
+    value: { board: board.value, hands: hands.value, turn, firstPlayer },
   };
 }
 
@@ -270,8 +244,7 @@ function parseSetup(setup: unknown): Parsed<ParsedSetup> {
  * square validity, stack height, one marshal per side on top of its stack,
  * the roster and that the side not to move is not in check.
  *
- * Not checked: a quiet-ply counter above `QUIET_PLY_LIMIT` (the next quiet
- * move draws), mate or stalemate (returned unconcluded; see `legalMoves`)
+ * Not checked: mate or stalemate (returned unconcluded; see `legalMoves`)
  * and anything that depends on how the position was reached.
  */
 export function positionError(setup: PositionSetup): PositionError | null {
@@ -290,8 +263,8 @@ export function positionError(setup: PositionSetup): PositionError | null {
 export function createPosition(setup: PositionSetup): GameState {
   const parsed = parseSetup(setup);
   if (!parsed.ok) throw new InvalidPositionError(parsed.error);
-  const { board, hands, turn, firstPlayer, quietPlies } = parsed.value;
-  return {
+  const { board, hands, turn, firstPlayer } = parsed.value;
+  const state: GameState = {
     phase: 'play',
     board,
     hands,
@@ -300,9 +273,11 @@ export function createPosition(setup: PositionSetup): GameState {
     placementDone: { black: true, white: true },
     captured: { black: [], white: [] },
     ply: 0,
-    quietPlies,
+    positionCounts: {},
     result: null,
   };
+  // §11.4 the given position is the first occurrence.
+  return recordPosition(state, true);
 }
 
 const PHASES: ReadonlySet<unknown> = new Set<GamePhase>(['placement', 'play', 'finished']);
@@ -312,7 +287,7 @@ const END_REASONS: Readonly<Record<GameEndReason, boolean>> = {
   marshalCaptured: true,
   checkmate: true,
   stalemate: false,
-  fiftyMoveRule: false,
+  fourfoldRepetition: false,
   resignation: true,
   timeout: true,
   agreement: false,
@@ -377,6 +352,38 @@ function resultError(phase: GamePhase, result: unknown): PositionError | null {
   return ok ? null : PositionError.INVALID_RESULT;
 }
 
+/** A `positionCounts` record: string keys, counts of at least 1. Never throws. */
+function parseCounts(value: unknown): Parsed<Readonly<Record<string, number>>> {
+  if (!isRecord(value)) return fail(PositionError.MALFORMED);
+  if (!Object.values(value).every((n) => isCount(n) && n >= 1)) {
+    return fail(PositionError.INVALID_COUNT);
+  }
+  return { ok: true, value: value as Record<string, number> };
+}
+
+/**
+ * §11.4 `positionCounts` against the phase and the current position: empty
+ * in placement; in play the current position has appeared and no position
+ * more than 3 times (the 4th ends the game); after the end, a count of 4 only
+ * for the current position of a `fourfoldRepetition` result, which needs it.
+ */
+function historyError(
+  phase: GamePhase,
+  counts: Readonly<Record<string, number>>,
+  key: string,
+  repeated: boolean,
+): PositionError | null {
+  const entries = Object.entries(counts);
+  if (phase === 'placement') return entries.length === 0 ? null : PositionError.INVALID_HISTORY;
+  const current = Object.hasOwn(counts, key) ? counts[key] : undefined;
+  if (phase === 'play' && current === undefined) return PositionError.INVALID_HISTORY;
+  if (repeated && current !== REPETITION_LIMIT) return PositionError.INVALID_HISTORY;
+  const tooMany = entries.some(
+    ([k, n]) => n >= REPETITION_LIMIT && !(repeated && k === key && n === REPETITION_LIMIT),
+  );
+  return tooMany ? PositionError.INVALID_HISTORY : null;
+}
+
 /**
  * §9.3 / §9.4 placement-phase consistency of `placementDone` and the turn.
  * The second player finishing ends the phase, a side with an empty hand has
@@ -415,18 +422,18 @@ function placementError(
  * invariants of `positionError`, phase-aware material (in placement a side
  * has its marshal once it has placed anything (§9.2), in play both marshals
  * are on the board, and captured pieces count against the roster), the
- * placement turn order for either first player (`placementError`) and that
- * the side not to move is not in check. The latter is allowed only in
- * placement, for a first player that has finished (§9.5, §9.6). Like
- * `positionError` it accepts an unconcluded mate, stalemate or quiet-ply
- * counter past the limit, and it does not replay history.
+ * placement turn order for either first player (`placementError`), the
+ * repetition counts (`historyError`) and that the side not to move is not in
+ * check. The latter is allowed only in placement, for a first player that
+ * has finished (§9.5, §9.6). Like `positionError` it accepts an unconcluded
+ * mate or stalemate, and it does not replay history.
  */
 export function stateError(state: unknown): PositionError | null {
   if (!isRecord(state)) return PositionError.MALFORMED;
   const { phase, turn, firstPlayer } = state;
   if (!PHASES.has(phase)) return PositionError.INVALID_PHASE;
   if (!isSide(turn) || !isSide(firstPlayer)) return PositionError.INVALID_TURN;
-  if (!isCount(state.ply) || !isCount(state.quietPlies)) return PositionError.INVALID_COUNT;
+  if (!isCount(state.ply)) return PositionError.INVALID_COUNT;
   const board = parseBoard(state.board);
   if (!board.ok) return board.error;
   const hands = parsePair(state.hands, parseFullHand);
@@ -435,6 +442,8 @@ export function stateError(state: unknown): PositionError | null {
   if (!done.ok) return done.error;
   const captured = parsePair(state.captured, parseCaptured);
   if (!captured.ok) return captured.error;
+  const counts = parseCounts(state.positionCounts);
+  if (!counts.ok) return counts.error;
   const gamePhase = phase as GamePhase;
   const resultErr = resultError(gamePhase, state.result);
   if (resultErr) return resultErr;
@@ -457,7 +466,12 @@ export function stateError(state: unknown): PositionError | null {
     materialError(board.value, hands.value, captured.value, marshalRequired);
   if (error) return error;
 
-  if (gamePhase === 'finished') return null;
-  const waiting = gamePhase === 'placement' && done.value[opponent(turn)];
-  return opponentCheckError(board.value, turn, waiting);
+  if (gamePhase !== 'finished') {
+    const waiting = gamePhase === 'placement' && done.value[opponent(turn)];
+    const checkErr = opponentCheckError(board.value, turn, waiting);
+    if (checkErr) return checkErr;
+  }
+  const repeated = (state.result as GameResult | null)?.reason === 'fourfoldRepetition';
+  const key = positionKey({ board: board.value, hands: hands.value, turn });
+  return historyError(gamePhase, counts.value, key, repeated);
 }

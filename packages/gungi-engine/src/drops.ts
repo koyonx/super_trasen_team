@@ -51,7 +51,6 @@ export function executeDrop(state: GameState, move: DropMove): GameState {
     },
     turn: opponent(move.player),
     ply: state.ply + 1,
-    quietPlies: 0,
   };
 }
 

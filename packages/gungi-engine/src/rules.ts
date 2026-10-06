@@ -69,8 +69,6 @@ export function executeBoardMove(state: GameState, move: BoardMove): GameState {
     board,
     turn: opponent(move.player),
     ply: state.ply + 1,
-    // §11.4 only captures reset the counter among board moves.
-    quietPlies: move.type === 'capture' ? 0 : state.quietPlies + 1,
   });
 
   const lift = (board: Board): Board => setStack(board, move.from, origin.slice(0, -1));

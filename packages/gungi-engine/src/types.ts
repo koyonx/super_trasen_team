@@ -50,7 +50,7 @@ export type GameEndReason =
   | 'marshalCaptured'
   | 'checkmate'
   | 'stalemate'
-  | 'fiftyMoveRule'
+  | 'fourfoldRepetition'
   | 'resignation'
   | 'timeout'
   | 'agreement';
@@ -75,10 +75,11 @@ export interface GameState {
   /** Number of moves applied so far (all phases). */
   readonly ply: number;
   /**
-   * §11.4 consecutive plies without a placement, drop, capture or ready
-   * declaration (`move` and `stack` only).
+   * §11.4 occurrences of each play-phase position (by `positionKey`) since
+   * play started or the last irreversible move, the current one included.
+   * Empty during placement.
    */
-  readonly quietPlies: number;
+  readonly positionCounts: Readonly<Record<string, number>>;
   readonly result: GameResult | null;
 }
 

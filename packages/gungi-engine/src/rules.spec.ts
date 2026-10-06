@@ -347,20 +347,6 @@ describe('§6.4 capture', () => {
   });
 });
 
-describe('§11.4 quiet-ply counter', () => {
-  const s = createPosition({
-    stacks: [...KINGS, at(4, 4, B('pawn')), at(4, 5, W('pawn')), at(2, 5, B('general'))],
-    quietPlies: 10,
-  });
-  it('move and stack increment it', () => {
-    expect(play(s, mv('stack', sq(4, 4), sq(4, 5))).quietPlies).toBe(11);
-    expect(play(s, mv('move', sq(2, 5), sq(2, 6))).quietPlies).toBe(11);
-  });
-  it('capture resets it', () => {
-    expect(play(s, mv('capture', sq(4, 4), sq(4, 5))).quietPlies).toBe(0);
-  });
-});
-
 describe('§6 boardMoves generation', () => {
   it('generates move/capture/stack options consistent with validation', () => {
     const s = createPosition({

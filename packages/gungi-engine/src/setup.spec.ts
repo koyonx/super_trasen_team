@@ -8,6 +8,7 @@ import {
   validatePlacementMove,
 } from './setup';
 import type { PlacementMove } from './setup';
+import { positionKey } from './repetition';
 import type { GameState, PieceKind, PlaceMove, PlayerSide } from './types';
 import { MoveError } from './types';
 
@@ -216,10 +217,11 @@ describe('§9.3 finishPlacement', () => {
     expect(s.turn).toBe('black');
   });
 
-  it('§11.4 placements and declarations keep the quiet-ply counter at 0', () => {
-    const s = run(withMarshals(), place('black', 'pawn', 0, 0), finish('white'));
-    expect(s.quietPlies).toBe(0);
-    expect(run({ ...withMarshals(), quietPlies: 7 }, finish('black')).quietPlies).toBe(0);
+  it('§11.4 placement records no positions; play starts with the first occurrence', () => {
+    const placing = run(withMarshals(), place('black', 'pawn', 0, 0));
+    expect(placing.positionCounts).toEqual({});
+    const s = run(placing, finish('white'));
+    expect(s.positionCounts).toEqual({ [positionKey(s)]: 1 });
   });
 });
 

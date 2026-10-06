@@ -48,15 +48,8 @@ export {
   PositionError,
   createPosition,
   positionError,
-  positionKey,
   stateError,
 } from './position';
+export { REPETITION_LIMIT, positionKey } from './repetition';
 export type { PositionSetup } from './position';
-export {
-  QUIET_PLY_LIMIT,
-  applyMove,
-  inCheck,
-  isGameOver,
-  legalMoves,
-  validateMove,
-} from './engine';
+export { applyMove, inCheck, isGameOver, legalMoves, validateMove } from './engine';

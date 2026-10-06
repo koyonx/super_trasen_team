@@ -8,6 +8,7 @@ import {
   positionError,
   stateError,
 } from './position';
+import { positionKey } from './repetition';
 import { createInitialState } from './setup';
 import { B, W, at, rng, sq } from './test-helpers';
 import { ROSTER } from './pieces';
@@ -33,7 +34,6 @@ describe('§12.1 createPosition invariants', () => {
       stacks: [...KINGS, at(4, 4, W('pawn'), B('samurai'), B('cannon'))],
       hands: { black: { pawn: 4 }, white: { general: 1 } },
       turn: 'white',
-      quietPlies: 3,
     };
     expect(positionError(setup)).toBeNull();
     expect(createPosition(setup).turn).toBe('white');
@@ -132,7 +132,6 @@ describe('§12.1 createPosition invariants', () => {
   it('rejects negative or fractional counts and a bad turn', () => {
     expectRejected({ stacks: KINGS, hands: { white: { pawn: -1 } } }, PositionError.INVALID_COUNT);
     expectRejected({ stacks: KINGS, hands: { white: { pawn: 1.5 } } }, PositionError.INVALID_COUNT);
-    expectRejected({ stacks: KINGS, quietPlies: -1 }, PositionError.INVALID_COUNT);
     expectRejected(
       { stacks: KINGS, turn: 'red' as unknown as 'black' },
       PositionError.INVALID_TURN,
@@ -191,13 +190,6 @@ describe('§12.1 the side not to move is never in check', () => {
 });
 
 describe('§12.1 what createPosition deliberately does not check', () => {
-  it('§11.4 accepts a quiet-ply counter above the limit; the next quiet move draws', () => {
-    const s = createPosition({ stacks: [...KINGS, at(4, 4, B('pawn'))], quietPlies: 60 });
-    expect(s.result).toBeNull();
-    const r = applyMove(s, { type: 'move', player: 'black', from: sq(4, 4), to: sq(4, 5) });
-    expect(r.ok && r.state.result).toEqual({ winner: null, reason: 'fiftyMoveRule' });
-  });
-
   it('§11.2 returns a mated position unconcluded; the caller detects it', () => {
     // General on file 0, a tier-3 cannon onto (1, 1), lieutenant onto (1, 0) (§5.3).
     const s = createPosition({
@@ -264,12 +256,6 @@ describe('§12.1 positionError on malformed input', () => {
     }
   });
 
-  it('rejects a non-numeric quietPlies', () => {
-    for (const quietPlies of [null, '0', [], {}, NaN]) {
-      expect(check({ stacks: KINGS, quietPlies })).toBe(PositionError.INVALID_COUNT);
-    }
-  });
-
   it('rejects sparse arrays instead of throwing (holes read as undefined)', () => {
     const pawn = B('pawn');
     const holed = (length: number, entries: Record<number, unknown>): unknown[] => {
@@ -332,9 +318,8 @@ describe('§12.1 positionError on malformed input', () => {
       stacks: [...KINGS, at(4, 4, W('pawn'), B('samurai'))],
       hands: { black: { pawn: 2 }, white: { general: 1 } },
       turn: 'white',
-      quietPlies: 3,
     };
-    const field = ['stacks', 'hands', 'turn', 'quietPlies'][Math.floor(rand() * 4)]!;
+    const field = ['stacks', 'hands', 'turn', 'firstPlayer'][Math.floor(rand() * 4)]!;
     const stacks = base.stacks as unknown[];
     const roll = rand();
     if (field === 'stacks' && roll < 0.5) {
@@ -378,7 +363,6 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
     stacks: [...KINGS, at(4, 4, W('pawn'), B('samurai'))],
     hands: { black: { pawn: 2 } },
     turn: 'white',
-    quietPlies: 3,
   });
 
   it('accepts states the engine produced', () => {
@@ -518,6 +502,7 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
       phase: 'placement',
       turn: 'white',
       hands,
+      positionCounts: {},
       placementDone: { black: true, white: false },
     };
     expect(stateError(restored(checked, placing))).toBeNull();
@@ -628,6 +613,45 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
       PositionError.INVALID_PHASE,
     );
     expect(stateError(restored(initial, { firstPlayer: 'red' }))).toBe(PositionError.INVALID_TURN);
+  });
+
+  it('§11.4 checks positionCounts against the phase and the current position', () => {
+    const key = positionKey(midGame);
+    expect(midGame.positionCounts).toEqual({ [key]: 1 });
+    // Shape and values.
+    for (const positionCounts of [undefined, null, 5, [], 'x']) {
+      expect(stateError(restored(midGame, { positionCounts }))).toBe(PositionError.MALFORMED);
+    }
+    for (const n of [0, -1, 1.5, '1', null]) {
+      expect(stateError(restored(midGame, { positionCounts: { [key]: n } }))).toBe(
+        PositionError.INVALID_COUNT,
+      );
+    }
+    // Play: the current position has appeared, nothing more than 3 times.
+    expect(stateError(restored(midGame, { positionCounts: { [key]: 3, other: 2 } }))).toBeNull();
+    expect(stateError(restored(midGame, { positionCounts: {} }))).toBe(
+      PositionError.INVALID_HISTORY,
+    );
+    expect(stateError(restored(midGame, { positionCounts: { other: 1 } }))).toBe(
+      PositionError.INVALID_HISTORY,
+    );
+    expect(stateError(restored(midGame, { positionCounts: { [key]: 4 } }))).toBe(
+      PositionError.INVALID_HISTORY,
+    );
+    // Placement: nothing is counted yet.
+    expect(stateError(restored(createInitialState(), { positionCounts: { x: 1 } }))).toBe(
+      PositionError.INVALID_HISTORY,
+    );
+    // Finished: 4 only for the current position of a repetition result, which needs it.
+    const ended = (result: unknown, positionCounts: unknown) =>
+      stateError(restored(midGame, { phase: 'finished', result, positionCounts }));
+    const repetition = { winner: null, reason: 'fourfoldRepetition' };
+    expect(ended(repetition, { [key]: 4, other: 3 })).toBeNull();
+    expect(ended(repetition, { [key]: 3 })).toBe(PositionError.INVALID_HISTORY);
+    expect(ended(repetition, { [key]: 1, other: 4 })).toBe(PositionError.INVALID_HISTORY);
+    const resigned = { winner: 'black', reason: 'resignation' };
+    expect(ended(resigned, { [key]: 4 })).toBe(PositionError.INVALID_HISTORY);
+    expect(ended(resigned, {})).toBeNull();
   });
 
   it.each([1, 2, 3])('seed %i: never throws on randomly corrupted states', (seed) => {

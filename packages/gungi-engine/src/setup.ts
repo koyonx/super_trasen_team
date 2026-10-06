@@ -16,6 +16,7 @@ import {
 } from './board';
 import { ROSTER, handTotal, isPieceKind, opponent, withHandDelta } from './pieces';
 import { placingError } from './placing';
+import { recordPosition } from './repetition';
 import type { FinishPlacementMove, GameState, PieceKind, PlaceMove, PlayerSide } from './types';
 import { MoveError, PIECE_KINDS } from './types';
 
@@ -45,7 +46,7 @@ export function createInitialState(options: InitialStateOptions = {}): GameState
     placementDone: { black: false, white: false },
     captured: { black: [], white: [] },
     ply: 0,
-    quietPlies: 0,
+    positionCounts: {},
     result: null,
   };
 }
@@ -56,12 +57,14 @@ export function hasPlacedMarshal(state: GameState, side: PlayerSide): boolean {
 
 /** §9.4 starts the play phase with the first player to move. */
 function startPlay(state: GameState): GameState {
-  return {
+  const next: GameState = {
     ...state,
     phase: 'play',
     turn: state.firstPlayer,
     placementDone: { black: true, white: true },
   };
+  // §11.4 the starting position is the first occurrence.
+  return recordPosition(next, true);
 }
 
 /**
@@ -107,10 +110,7 @@ export function executePlacementMove(state: GameState, move: PlacementMove): Gam
   if (move.type === 'finishPlacement') {
     // §9.3 the first player stops alone; the second player ends the phase.
     const placementDone = { ...state.placementDone, [move.player]: true };
-    return advancePlacement(
-      { ...state, placementDone, ply: state.ply + 1, quietPlies: 0 },
-      move.player,
-    );
+    return advancePlacement({ ...state, placementDone, ply: state.ply + 1 }, move.player);
   }
   const stack = getStack(state.board, move.to);
   const hand = withHandDelta(state.hands[move.player], move.kind, -1);
@@ -121,7 +121,6 @@ export function executePlacementMove(state: GameState, move: PlacementMove): Gam
     // §9.3 placing the last piece in hand counts as finishing (R-7).
     placementDone: { ...state.placementDone, [move.player]: handTotal(hand) === 0 },
     ply: state.ply + 1,
-    quietPlies: 0,
   };
   return advancePlacement(placed, move.player);
 }
