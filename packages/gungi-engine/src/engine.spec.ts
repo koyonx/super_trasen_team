@@ -97,11 +97,12 @@ describe('§10.1 self-check is rejected', () => {
 });
 
 /**
- * R-7: legality is judged on the board the capture really produces, where the
- * capturer always lands on the remaining stack (§6.4). gungi.js 1.0.20 judges
- * these on a board where the capturer stays put; each case below flips.
+ * R-8: legality is judged on the board the capture really produces, where the
+ * capturer always lands on the remaining stack (§6.4). gungi.js 1.0.20
+ * `moves()` judges these on a board where the capturer stays put while the
+ * square is not emptied; the verdict of each case below differs from it.
  */
-describe('§10.1 self-check under §6.4 capture-advance', () => {
+describe('R-8 §10.1 self-check under §6.4 capture-advance', () => {
   it('a pinned piece may not capture onto a remaining stack off the line', () => {
     const s = createPosition({
       stacks: [

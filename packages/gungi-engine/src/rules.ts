@@ -77,7 +77,7 @@ export function executeBoardMove(state: GameState, move: BoardMove): GameState {
 
   if (move.type === 'capture') {
     // §6.4 only the top piece is taken and the capturer always moves onto
-    // whatever remains (R-7). Legal-move filtering goes through this same
+    // whatever remains (R-8). Legal-move filtering goes through this same
     // function, so the simulated and the applied capture never differ.
     const victim = topPiece(target);
     if (!victim) throw new Error('executeBoardMove: nothing to capture');
