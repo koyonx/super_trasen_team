@@ -34,7 +34,7 @@ describe('§12 public API', () => {
   });
 
   it('exposes the createPosition error type', () => {
-    expect(() => engine.createPosition()).toThrow(engine.InvalidPositionError);
+    expect(() => engine.createPosition({})).toThrow(engine.InvalidPositionError);
     expect(Object.keys(engine.PositionError)).toHaveLength(10);
   });
 

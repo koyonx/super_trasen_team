@@ -143,7 +143,7 @@ export function positionError(setup: PositionSetup): PositionError | null {
  * `positionError`; a corrupt state would otherwise surface later as wrong
  * rulings. Callers handling untrusted input can call `positionError` first.
  */
-export function createPosition(setup: PositionSetup = {}): GameState {
+export function createPosition(setup: PositionSetup): GameState {
   const error = positionError(setup);
   if (error) throw new InvalidPositionError(error);
   let board = createEmptyBoard();
