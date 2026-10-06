@@ -2,20 +2,21 @@
  * Drops from hand (新, §8).
  */
 
-import { allSquares, getStack, isValidSquare, setStack } from './board';
+import { allSquares, getStack, isValidSquare, setStack, topPiece } from './board';
 import { isPieceKind, opponent, withHandDelta } from './pieces';
 import { placingError } from './placing';
 import type { Board, DropMove, GameState, PlayerSide } from './types';
 import { MoveError, PIECE_KINDS } from './types';
 
 /**
- * §8.2 the most advanced rank holding any piece of `side`, buried pieces
- * included (R-5), or `null` if the side has no piece on the board.
+ * §8.2 the most advanced rank where `side` owns the top piece of a stack, or
+ * `null` if no stack has a top piece of `side`. Own pieces buried under an
+ * enemy top do not count (R-5).
  */
 export function frontLineRank(board: Board, side: PlayerSide): number | null {
   let front: number | null = null;
   for (const sq of allSquares()) {
-    if (!getStack(board, sq).some((p) => p.owner === side)) continue;
+    if (topPiece(getStack(board, sq))?.owner !== side) continue;
     if (front === null || (side === 'black' ? sq.rank > front : sq.rank < front)) front = sq.rank;
   }
   return front;

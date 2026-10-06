@@ -93,14 +93,44 @@ describe('§8.2 front line', () => {
     expect(dropMoves(s, 'black').map((m) => m.to.rank)).toEqual(Array(8).fill(0));
   });
 
-  it('R-5 a buried own piece counts toward the front line', () => {
+  it('R-5 a black piece buried under a white top does not extend the front line', () => {
     const s = createPosition({
-      stacks: [at(4, 0, B('marshal')), at(4, 8, W('marshal')), at(2, 6, B('pawn'), W('lancer'))],
+      stacks: [at(4, 0, B('marshal')), at(4, 8, W('marshal')), at(2, 6, B('pawn'), W('samurai'))],
       hands: { black: { general: 1 } },
     });
-    expect(frontLineRank(s.board, 'black')).toBe(6);
-    expect(validateDrop(s, drop('general', 7, 6))).toBeNull();
-    expect(validateDrop(s, drop('general', 7, 7))).toBe(MoveError.OUTSIDE_DROP_ZONE);
+    expect(frontLineRank(s.board, 'black')).toBe(0);
+    expect(validateDrop(s, drop('general', 7, 0))).toBeNull();
+    expect(validateDrop(s, drop('general', 7, 1))).toBe(MoveError.OUTSIDE_DROP_ZONE);
+    expect(validateDrop(s, drop('general', 7, 6))).toBe(MoveError.OUTSIDE_DROP_ZONE);
+    expect(dropMoves(s, 'black').every((m) => m.to.rank === 0)).toBe(true);
+  });
+
+  it('R-5 a white piece buried under a black top does not extend the front line', () => {
+    const s = createPosition({
+      stacks: [at(4, 0, B('marshal')), at(4, 8, W('marshal')), at(2, 2, W('pawn'), B('samurai'))],
+      hands: { white: { general: 1 } },
+      turn: 'white',
+    });
+    expect(frontLineRank(s.board, 'white')).toBe(8);
+    expect(validateDrop(s, drop('general', 7, 8, 'white'))).toBeNull();
+    expect(validateDrop(s, drop('general', 7, 7, 'white'))).toBe(MoveError.OUTSIDE_DROP_ZONE);
+    expect(validateDrop(s, drop('general', 7, 2, 'white'))).toBe(MoveError.OUTSIDE_DROP_ZONE);
+    expect(dropMoves(s, 'white').every((m) => m.to.rank === 8)).toBe(true);
+  });
+
+  it.each([
+    ['black', 6, at(0, 6, W('pawn'), B('pawn'))],
+    ['white', 2, at(0, 2, B('pawn'), W('pawn'))],
+  ] as const)('an own top over an enemy piece does count (%s)', (side, rank, stack) => {
+    const s = createPosition({
+      stacks: [at(4, 0, B('marshal')), at(4, 8, W('marshal')), stack],
+      hands: { [side]: { general: 1 } },
+      turn: side,
+    });
+    const beyond = side === 'black' ? rank + 1 : rank - 1;
+    expect(frontLineRank(s.board, side)).toBe(rank);
+    expect(validateDrop(s, drop('general', 7, rank, side))).toBeNull();
+    expect(validateDrop(s, drop('general', 7, beyond, side))).toBe(MoveError.OUTSIDE_DROP_ZONE);
   });
 
   it('enemy pieces do not move the front line', () => {
