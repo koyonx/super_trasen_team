@@ -75,9 +75,9 @@ export interface GameState {
   /** Number of moves applied so far (all phases). */
   readonly ply: number;
   /**
-   * §11.4 occurrences of each play-phase position (by `positionKey`) since
-   * play started or the last irreversible move, the current one included.
-   * Empty during placement.
+   * §11.4 occurrences of each play-phase position, keyed by `positionHash`
+   * (16 hex digits), since play started or the last irreversible move, the
+   * current one included. Empty during placement.
    */
   readonly positionCounts: Readonly<Record<string, number>>;
   readonly result: GameResult | null;

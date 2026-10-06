@@ -4,7 +4,7 @@ import { applyBetrayal, betrayalError } from './betrayal';
 import { applyMove, legalMoves, validateMove } from './engine';
 import { emptyHand } from './pieces';
 import { createPosition, stateError } from './position';
-import { positionKey } from './repetition';
+import { positionHash } from './repetition';
 import { boardMoves, validateBoardMove } from './rules';
 import { createInitialState } from './setup';
 import { B, W, at, sq } from './test-helpers';
@@ -216,7 +216,7 @@ describe('§7.1 / §7.2 betrayal (寝返り)', () => {
   it('§11.4 restarts the repetition count', () => {
     const s = setup([W('pawn')], { pawn: 1 });
     const next = play(s, stackOn(T, TARGET, true));
-    expect(next.positionCounts).toEqual({ [positionKey(next)]: 1 });
+    expect(next.positionCounts).toEqual({ [positionHash(next)]: 1 });
     const plain = play(s, stackOn(T, TARGET));
     expect(Object.keys(plain.positionCounts)).toHaveLength(2);
   });

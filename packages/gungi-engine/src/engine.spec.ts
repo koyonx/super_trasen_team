@@ -3,7 +3,13 @@ import { allSquares, getStack, setStack } from './board';
 import { applyMove, inCheck, isGameOver, legalMoves, validateMove } from './engine';
 import { handTotal, opponent } from './pieces';
 import { createPosition, stateError } from './position';
-import { REPETITION_LIMIT, positionKey } from './repetition';
+import {
+  POSITION_HASH_LENGTH,
+  REPETITION_LIMIT,
+  fnv1a64,
+  positionHash,
+  positionKey,
+} from './repetition';
 import { createInitialState } from './setup';
 import { B, W, at, rng, sq } from './test-helpers';
 import type { BoardMove, GameState, Move, PieceKind, PlayerSide, Square } from './types';
@@ -279,12 +285,12 @@ describe('§11.4 fourfold repetition', () => {
 
   it('the starting position counts as the first occurrence', () => {
     const s = createPosition({ stacks: KINGS_ONLY });
-    expect(s.positionCounts).toEqual({ [positionKey(s)]: 1 });
+    expect(s.positionCounts).toEqual({ [positionHash(s)]: 1 });
   });
 
   it('the fourth occurrence of a position ends the game without a winner', () => {
     let s = createPosition({ stacks: KINGS_ONLY });
-    const start = positionKey(s);
+    const start = positionHash(s);
     s = play(s, ...shuffle, ...shuffle);
     expect(s.positionCounts[start]).toBe(3);
     s = play(s, ...shuffle.slice(0, 3));
@@ -300,21 +306,21 @@ describe('§11.4 fourfold repetition', () => {
   it('counts every position, not only the starting one', () => {
     let s = createPosition({ stacks: KINGS_ONLY });
     s = play(s, shuffle[0]!, shuffle[1]!, shuffle[2]!, shuffle[3]!, shuffle[0]!);
-    const afterFirst = positionKey(s);
+    const afterFirst = positionHash(s);
     expect(s.positionCounts[afterFirst]).toBe(2);
     expect(Object.values(s.positionCounts).sort()).toEqual([1, 1, 2, 2]);
   });
 
   it('the same board with the other side to move is a different position', () => {
     const s = createPosition({ stacks: KINGS_ONLY });
-    expect(positionKey({ ...s, turn: 'white' })).not.toBe(positionKey(s));
+    expect(positionHash({ ...s, turn: 'white' })).not.toBe(positionHash(s));
   });
 
   it('a drop restarts the count', () => {
     const s = createPosition({ stacks: KINGS_ONLY, hands: { black: { general: 1 } } });
     const looped = play(s, ...shuffle, ...shuffle);
     const next = play(looped, { type: 'drop', player: 'black', kind: 'general', to: sq(3, 0) });
-    expect(next.positionCounts).toEqual({ [positionKey(next)]: 1 });
+    expect(next.positionCounts).toEqual({ [positionHash(next)]: 1 });
     expect(next.result).toBeNull();
   });
 
@@ -323,7 +329,7 @@ describe('§11.4 fourfold repetition', () => {
       stacks: [...KINGS_ONLY, at(4, 4, B('pawn')), at(4, 5, W('pawn'))],
     });
     const next = play(s, mv('capture', [4, 4], [4, 5]));
-    expect(next.positionCounts).toEqual({ [positionKey(next)]: 1 });
+    expect(next.positionCounts).toEqual({ [positionHash(next)]: 1 });
   });
 
   it('move and stack keep counting', () => {
@@ -365,12 +371,56 @@ describe('§12.1 state data', () => {
     expect(positionKey(withHand)).not.toBe(positionKey(a));
   });
 
+  it('positionHash is the 64-bit FNV-1a of positionKey (UTF-8)', () => {
+    // Published FNV-1a 64 test vectors, plus non-ASCII input checked against
+    // an independent implementation.
+    expect(fnv1a64('')).toBe('cbf29ce484222325');
+    expect(fnv1a64('a')).toBe('af63dc4c8601ec8c');
+    expect(fnv1a64('foobar')).toBe('85944171f73967e8');
+    expect(fnv1a64('+帥 -兵')).toBe('fe76059653bddc3e');
+    expect(fnv1a64('\u{1d11e}')).toBe('0cf987387bfa4bb8');
+    const s = createPosition({ stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))] });
+    expect(positionHash(s)).toBe(fnv1a64(positionKey(s)));
+    expect(positionHash(s)).toMatch(/^[0-9a-f]{16}$/);
+    expect(POSITION_HASH_LENGTH).toBe(16);
+  });
+
+  it('§11.4 the repetition history stays small over a long game', () => {
+    let s = createPosition({
+      stacks: [
+        at(0, 0, B('marshal')),
+        at(8, 8, W('marshal')),
+        at(4, 4, B('pawn')),
+        at(4, 6, W('pawn')),
+      ],
+    });
+    const rand = rng(7);
+    // 300 plies of reversible moves only, never ending the game, so the
+    // whole game stays in one counting window.
+    for (let i = 0; i < 300; i++) {
+      const next = legalMoves(s)
+        .filter((m) => m.type === 'move')
+        .flatMap((m) => {
+          const r = applyMove(s, m);
+          return r.ok && r.state.result === null ? [r.state] : [];
+        });
+      s = next[Math.floor(rand() * next.length)]!;
+    }
+    const keys = Object.keys(s.positionCounts);
+    expect(s.ply).toBe(300);
+    expect(keys.length).toBeGreaterThan(250);
+    keys.forEach((k) => expect(k).toHaveLength(POSITION_HASH_LENGTH));
+    // ~21 bytes per entry; the same history keyed by positionKey was ~45 KB.
+    expect(JSON.stringify(s).length).toBeLessThan(8 * 1024);
+    expect(stateError(JSON.parse(JSON.stringify(s)))).toBeNull();
+  });
+
   it('createPosition builds a play-phase state', () => {
     const s = createPosition({ stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))] });
     expect(s.phase).toBe('play');
     expect(s.turn).toBe('black');
     expect(s.firstPlayer).toBe('black');
-    expect(s.positionCounts).toEqual({ [positionKey(s)]: 1 });
+    expect(s.positionCounts).toEqual({ [positionHash(s)]: 1 });
     expect(JSON.parse(JSON.stringify(s))).toEqual(s);
   });
 });
@@ -703,7 +753,7 @@ function checkInvariants(state: GameState): void {
   const counts = Object.values(state.positionCounts);
   const repeated = state.result?.reason === 'fourfoldRepetition';
   expect(Math.max(0, ...counts)).toBeLessThanOrEqual(repeated ? REPETITION_LIMIT : 3);
-  if (state.phase === 'play') expect(state.positionCounts[positionKey(state)]).toBeGreaterThan(0);
+  if (state.phase === 'play') expect(state.positionCounts[positionHash(state)]).toBeGreaterThan(0);
   if (state.phase === 'placement') expect(counts).toEqual([]);
   if (state.phase !== 'finished') {
     // §10.1 the side that just moved is never left in check, except a first

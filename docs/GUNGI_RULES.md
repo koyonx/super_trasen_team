@@ -394,9 +394,14 @@
 - 主なフィールド: `phase`（`placement` / `play` / `finished`）, `board`（`board[rank][file]` = 下→上の駒配列）,
   `hands`, `turn`, `firstPlayer`（§9.1）, `placementDone`, `captured`, `ply`, `positionCounts`, `result`。
 - すべての関数は入力状態を変更しない（イミュータブル）。
-- `positionKey(state)` は盤面・両者の持ち駒・手番から局面を一意に表す文字列を返す。§11.4 の千日手判定に使う。
+- `positionKey(state)` は盤面・両者の持ち駒・手番から局面を一意に表す文字列（約 140 文字）を返す。人が読める形式で、棋譜・解析・AI 用。
+- `positionHash(state)` は `positionKey` の UTF-8 バイト列の 64 ビット FNV-1a ハッシュを 16 桁の小文字 16 進文字列で返す（`POSITION_HASH_LENGTH`）。§11.4 の千日手判定に使う。
+  衝突すると別局面を同一局面と数えうるが、数え直し区間の局面数 n は高々数百で、衝突確率は誕生日問題の上界 n²/2⁶⁵
+  （n = 300 で約 2.4×10⁻¹⁵、n = 10,000 でも約 2.7×10⁻¹²）なので無視できる。
 - `positionCounts` は、対局フェーズ開始または直近の不可逆手（`capture`、`drop`、`betray: true` の `stack`）以降に現れた
-  各局面の `positionKey` とその出現回数（現在の局面を含む）。配置フェーズ中は空（`{}`）。
+  各局面の `positionHash` とその出現回数（現在の局面を含む）。配置フェーズ中は空（`{}`）。
+  キーを `positionKey` ではなくハッシュにするのは、長い対局で履歴が状態の大半を占めるのを防ぐため
+  （300 手・296 局面の対局で状態全体が約 45 KB → 約 7 KB）。
 - `createPosition(setup)` は任意局面（テスト・AI・棋譜読み込み）から対局フェーズの状態を作る（`setup` は `stacks`, `hands`, `turn`, `firstPlayer`。
   `firstPlayer` は省略時 `'black'` で、対局フェーズのルールには影響しない）。
   与えた局面を §11.4 の 1 回目として数える。
@@ -429,7 +434,7 @@
   - 配置フェーズの手番（`INVALID_TURN`、§9.4）: 手番が済の側にない。両者とも未済なら、すべての手が先手から交互の `place` なので、
     盤上の駒数は先手の手番なら両者同数、後手の手番なら先手が 1 枚多い。先手が黒でも白でも同じ規則で検査する
   - `result` は `finished` のときだけ存在し、`reason` が §11 の値で、引き分けの理由なら `winner: null`、それ以外は勝者がいる（`INVALID_RESULT`）
-  - `positionCounts` がフェーズと現在の局面に合う（`INVALID_HISTORY`）: 配置フェーズでは空。
+  - `positionCounts` がフェーズと現在の局面に合う（`INVALID_HISTORY`）: キーはすべて `positionHash` の形式（16 桁の小文字 16 進）。配置フェーズでは空。
     対局フェーズでは現在の局面が 1..3 回、他の局面も 1..3 回。終局後は 1..3 回で、ただし `fourfoldRepetition` の終局では現在の局面がちょうど 4 回
   - `positionError` と同じ盤面の不変条件（`STACK_TOO_HIGH`, `MARSHAL_NOT_ON_TOP`）
   - フェーズに応じた駒数: 帥は各陣営 1 枚以下で、対局フェーズでは必ず 1 枚、配置フェーズでは駒を置いた・済を宣言した側は 1 枚（§9.2）。

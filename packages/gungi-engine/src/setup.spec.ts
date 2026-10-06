@@ -8,7 +8,7 @@ import {
   validatePlacementMove,
 } from './setup';
 import type { PlacementMove } from './setup';
-import { positionKey } from './repetition';
+import { positionHash } from './repetition';
 import type { GameState, PieceKind, PlaceMove, PlayerSide } from './types';
 import { MoveError } from './types';
 
@@ -221,7 +221,7 @@ describe('§9.3 finishPlacement', () => {
     const placing = run(withMarshals(), place('black', 'pawn', 0, 0));
     expect(placing.positionCounts).toEqual({});
     const s = run(placing, finish('white'));
-    expect(s.positionCounts).toEqual({ [positionKey(s)]: 1 });
+    expect(s.positionCounts).toEqual({ [positionHash(s)]: 1 });
   });
 });
 

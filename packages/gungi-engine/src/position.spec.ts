@@ -8,7 +8,7 @@ import {
   positionError,
   stateError,
 } from './position';
-import { positionKey } from './repetition';
+import { positionHash, positionKey } from './repetition';
 import { createInitialState } from './setup';
 import { B, W, at, rng, sq } from './test-helpers';
 import { ROSTER } from './pieces';
@@ -616,7 +616,8 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
   });
 
   it('§11.4 checks positionCounts against the phase and the current position', () => {
-    const key = positionKey(midGame);
+    const key = positionHash(midGame);
+    const other = '0123456789abcdef';
     expect(midGame.positionCounts).toEqual({ [key]: 1 });
     // Shape and values.
     for (const positionCounts of [undefined, null, 5, [], 'x']) {
@@ -628,27 +629,34 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
       );
     }
     // Play: the current position has appeared, nothing more than 3 times.
-    expect(stateError(restored(midGame, { positionCounts: { [key]: 3, other: 2 } }))).toBeNull();
+    expect(stateError(restored(midGame, { positionCounts: { [key]: 3, [other]: 2 } }))).toBeNull();
     expect(stateError(restored(midGame, { positionCounts: {} }))).toBe(
       PositionError.INVALID_HISTORY,
     );
-    expect(stateError(restored(midGame, { positionCounts: { other: 1 } }))).toBe(
+    expect(stateError(restored(midGame, { positionCounts: { [other]: 1 } }))).toBe(
       PositionError.INVALID_HISTORY,
     );
     expect(stateError(restored(midGame, { positionCounts: { [key]: 4 } }))).toBe(
       PositionError.INVALID_HISTORY,
     );
+    // Keys are positionHash values, not raw positionKey strings.
+    expect(stateError(restored(midGame, { positionCounts: { [positionKey(midGame)]: 1 } }))).toBe(
+      PositionError.INVALID_HISTORY,
+    );
+    expect(
+      stateError(restored(midGame, { positionCounts: { [key]: 1, [key.toUpperCase()]: 1 } })),
+    ).toBe(PositionError.INVALID_HISTORY);
     // Placement: nothing is counted yet.
-    expect(stateError(restored(createInitialState(), { positionCounts: { x: 1 } }))).toBe(
+    expect(stateError(restored(createInitialState(), { positionCounts: { [other]: 1 } }))).toBe(
       PositionError.INVALID_HISTORY,
     );
     // Finished: 4 only for the current position of a repetition result, which needs it.
     const ended = (result: unknown, positionCounts: unknown) =>
       stateError(restored(midGame, { phase: 'finished', result, positionCounts }));
     const repetition = { winner: null, reason: 'fourfoldRepetition' };
-    expect(ended(repetition, { [key]: 4, other: 3 })).toBeNull();
+    expect(ended(repetition, { [key]: 4, [other]: 3 })).toBeNull();
     expect(ended(repetition, { [key]: 3 })).toBe(PositionError.INVALID_HISTORY);
-    expect(ended(repetition, { [key]: 1, other: 4 })).toBe(PositionError.INVALID_HISTORY);
+    expect(ended(repetition, { [key]: 1, [other]: 4 })).toBe(PositionError.INVALID_HISTORY);
     const resigned = { winner: 'black', reason: 'resignation' };
     expect(ended(resigned, { [key]: 4 })).toBe(PositionError.INVALID_HISTORY);
     expect(ended(resigned, {})).toBeNull();

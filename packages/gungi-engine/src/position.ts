@@ -1,7 +1,7 @@
 import { BOARD_SIZE, MAX_STACK_HEIGHT } from '@gungi/shared';
 import { allSquares, createEmptyBoard, getStack, isValidSquare, setStack } from './board';
 import { ROSTER, emptyHand, handTotal, isPieceKind, opponent } from './pieces';
-import { REPETITION_LIMIT, positionKey, recordPosition } from './repetition';
+import { REPETITION_LIMIT, isPositionHash, positionHash, recordPosition } from './repetition';
 import { isInCheck } from './rules';
 import type {
   Board,
@@ -362,10 +362,11 @@ function parseCounts(value: unknown): Parsed<Readonly<Record<string, number>>> {
 }
 
 /**
- * §11.4 `positionCounts` against the phase and the current position: empty
- * in placement; in play the current position has appeared and no position
- * more than 3 times (the 4th ends the game); after the end, a count of 4 only
- * for the current position of a `fourfoldRepetition` result, which needs it.
+ * §11.4 `positionCounts` against the phase and the current position: every
+ * key is a `positionHash`; empty in placement; in play the current position
+ * (by hash) has appeared and no position more than 3 times (the 4th ends the
+ * game); after the end, a count of 4 only for the current position of a
+ * `fourfoldRepetition` result, which needs it.
  */
 function historyError(
   phase: GamePhase,
@@ -374,6 +375,7 @@ function historyError(
   repeated: boolean,
 ): PositionError | null {
   const entries = Object.entries(counts);
+  if (!entries.every(([k]) => isPositionHash(k))) return PositionError.INVALID_HISTORY;
   if (phase === 'placement') return entries.length === 0 ? null : PositionError.INVALID_HISTORY;
   const current = Object.hasOwn(counts, key) ? counts[key] : undefined;
   if (phase === 'play' && current === undefined) return PositionError.INVALID_HISTORY;
@@ -472,6 +474,6 @@ export function stateError(state: unknown): PositionError | null {
     if (checkErr) return checkErr;
   }
   const repeated = (state.result as GameResult | null)?.reason === 'fourfoldRepetition';
-  const key = positionKey({ board: board.value, hands: hands.value, turn });
+  const key = positionHash({ board: board.value, hands: hands.value, turn });
   return historyError(gamePhase, counts.value, key, repeated);
 }

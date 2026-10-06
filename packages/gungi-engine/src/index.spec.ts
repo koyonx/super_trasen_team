@@ -23,6 +23,7 @@ describe('§12 public API', () => {
       'isGameOver',
       'inCheck',
       'positionKey',
+      'positionHash',
       'positionError',
       'stateError',
     ] as const) {

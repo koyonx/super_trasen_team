@@ -50,6 +50,6 @@ export {
   positionError,
   stateError,
 } from './position';
-export { REPETITION_LIMIT, positionKey } from './repetition';
+export { POSITION_HASH_LENGTH, REPETITION_LIMIT, positionHash, positionKey } from './repetition';
 export type { PositionSetup } from './position';
 export { applyMove, inCheck, isGameOver, legalMoves, validateMove } from './engine';
