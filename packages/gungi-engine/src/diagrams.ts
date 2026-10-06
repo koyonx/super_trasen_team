@@ -11,6 +11,10 @@
  * which the piece reaches it, slides are drawn as red cells with an arrow to
  * the board edge, jump landings carry a ring and squares a jump only passes
  * over carry a grey cross.
+ *
+ * Two more images draw the official §5.4 figures of the archer: a real
+ * position (`createPosition`) with a taller enemy stack on its jump ray, the
+ * open and blocked landings taken from `ruleSquares` on that position.
  */
 
 import { BOARD_SIZE } from '@gungi/shared';
@@ -18,6 +22,7 @@ import { createEmptyBoard, isOnBoard, setStack } from './board';
 import type { Direction, MoveRule } from './movement';
 import { MOVE_RULES, jumpSquares, ruleSquares } from './movement';
 import { PIECE_GLYPHS, ROSTER } from './pieces';
+import { createPosition } from './position';
 import type { Board, Piece, PieceKind, Square } from './types';
 import { PIECE_KINDS } from './types';
 
@@ -303,6 +308,193 @@ export function renderLegendSvg(): string {
 }
 
 // ---------------------------------------------------------------------------
+// §5.4 blocking scenarios of the archer (official figures 1 and 2)
+// ---------------------------------------------------------------------------
+
+/** One of the PO's official archer figures, set up as a real position. */
+export interface ArcherBlockScenario {
+  readonly id: 1 | 2;
+  /** Tier of the (black) archer; blocking needs a stack higher than this. */
+  readonly tier: 1 | 2;
+  /** Offset of the enemy stack from the archer (black's view). */
+  readonly blocker: Direction;
+  /** Height of the enemy stack (> tier). */
+  readonly height: 2 | 3;
+}
+
+/**
+ * Figure 1: a taller stack on (+1,+1) closes the whole right ray.
+ * Figure 2: a taller stack on the (+1,+2) landing keeps it a landing but
+ * closes (+2,+3). Both use a tier-2 archer under a 3-high stack: the highest
+ * tier at which a jump can still be blocked (§5.4; stacks hold at most 3).
+ */
+export const ARCHER_BLOCK_SCENARIOS: readonly ArcherBlockScenario[] = [
+  { id: 1, tier: 2, blocker: [1, 1], height: 3 },
+  { id: 2, tier: 2, blocker: [1, 2], height: 3 },
+];
+
+export interface ScenarioLanding {
+  /** Lowest tier from which the archer lands here on an empty board. */
+  readonly tier: Tier;
+  /** Closed by the blocker (the engine does not reach it). */
+  readonly blocked: boolean;
+}
+
+export interface ScenarioDiagram {
+  readonly scenario: ArcherBlockScenario;
+  readonly origin: Square;
+  /** The position the sets were taken from (built with `createPosition`). */
+  readonly board: Board;
+  readonly blocker: Square;
+  /** Every forward jump landing of the archer at `scenario.tier`, keyed by `squareKey`. */
+  readonly landings: ReadonlyMap<string, ScenarioLanding>;
+  /** Squares the jumps only pass over (never landed on), excluding the blocker. */
+  readonly passed: ReadonlySet<string>;
+}
+
+/** The archer of the scenarios; the window shows files ±3 and ranks 0..+3 around it. */
+const SCENARIO_ORIGIN: Square = CENTER;
+const SCENARIO_WINDOW = { left: 3, right: 3, back: 0, ahead: 3 } as const;
+
+export function archerBlockDiagram(scenario: ArcherBlockScenario): ScenarioDiagram {
+  const origin = SCENARIO_ORIGIN;
+  const at = ([df, dr]: Direction): Square => ({
+    file: origin.file + df,
+    rank: origin.rank + dr,
+  });
+  const blocker = at(scenario.blocker);
+  const archer: Piece = { kind: 'archer', owner: 'black' };
+  const { board } = createPosition({
+    stacks: [
+      { square: { file: 0, rank: 0 }, pieces: [{ kind: 'marshal', owner: 'black' }] },
+      {
+        square: { file: BOARD_SIZE - 1, rank: BOARD_SIZE - 1 },
+        pieces: [{ kind: 'marshal', owner: 'white' }],
+      },
+      {
+        square: origin,
+        pieces: [
+          ...Array.from({ length: scenario.tier - 1 }, (): Piece => ({
+            kind: 'pawn',
+            owner: 'black',
+          })),
+          archer,
+        ],
+      },
+      {
+        square: blocker,
+        pieces: Array.from({ length: scenario.height }, (): Piece => ({
+          kind: 'pawn',
+          owner: 'white',
+        })),
+      },
+    ],
+  });
+  const landings = new Map<string, ScenarioLanding>();
+  const passed = new Set<string>();
+  for (const rule of MOVE_RULES.archer) {
+    if (rule.kind !== 'jump') continue;
+    const reached = new Set(ruleSquares(board, origin, archer, rule, scenario.tier).map(squareKey));
+    jumpSquares(rule, scenario.tier).forEach(({ landing }, k) => {
+      const sq = at(landing);
+      if (!onBoard(sq)) return;
+      const key = squareKey(sq);
+      landings.set(key, { tier: TIERS[k] ?? 3, blocked: !reached.has(key) });
+    });
+    for (const d of rule.over) {
+      const sq = at(d);
+      if (onBoard(sq) && squareKey(sq) !== squareKey(blocker)) passed.add(squareKey(sq));
+    }
+  }
+  return { scenario, origin, board, blocker, landings, passed };
+}
+
+export const SCENARIO_COLORS = {
+  blocked: '#d4cfc6',
+  blockedRing: '#8a8a8a',
+  strike: '#d62828',
+  blocker: '#3d3d3d',
+} as const;
+
+const blockedMark = ([x, y]: Point): string => {
+  const [cx, cy] = [x + CELL / 2, y + CELL / 2];
+  const i = 5;
+  return (
+    `<circle cx="${n(cx)}" cy="${n(cy)}" r="6" fill="#ffffff" stroke="${SCENARIO_COLORS.blockedRing}" stroke-width="1.5"/>` +
+    `<path d="M${n(x + i)} ${n(y + CELL - i)}L${n(x + CELL - i)} ${n(y + i)}" ` +
+    `stroke="${SCENARIO_COLORS.strike}" stroke-width="3" stroke-linecap="round"/>`
+  );
+};
+
+const blockerMark = ([x, y]: Point, height: number, landing: boolean): string => {
+  const i = 4;
+  const [cx, cy] = [x + CELL / 2, y + CELL / 2];
+  return (
+    `<rect x="${n(x + i)}" y="${n(y + i)}" width="${CELL - 2 * i}" height="${CELL - 2 * i}" rx="4" fill="${SCENARIO_COLORS.blocker}"/>` +
+    `<text x="${n(cx)}" y="${n(cy - 4)}" fill="${COLORS.glyph}" font-family="${LABEL_FONT}" font-size="14" ` +
+    `text-anchor="middle" dominant-baseline="central">■</text>` +
+    `<text x="${n(cx)}" y="${n(cy + 10)}" fill="${COLORS.glyph}" font-family="${LABEL_FONT}" font-size="9" ` +
+    `text-anchor="middle" dominant-baseline="central">${height}段</text>` +
+    (landing
+      ? `<circle cx="${n(x + CELL - 7)}" cy="${n(y + 7)}" r="5" fill="#ffffff" stroke="${COLORS.ring}" stroke-width="1.5"/>`
+      : '')
+  );
+};
+
+/** The SVG image of one scenario (docs/pieces/archer-block-<id>.svg). */
+export function renderScenarioSvg(diagram: ScenarioDiagram): string {
+  const { scenario, origin } = diagram;
+  const cols = SCENARIO_WINDOW.left + SCENARIO_WINDOW.right + 1;
+  const rows = SCENARIO_WINDOW.back + SCENARIO_WINDOW.ahead + 1;
+  const caption = 22;
+  const width = 2 * PAD + cols * CELL;
+  const height = 2 * PAD + rows * CELL + caption;
+  const corner = (sq: Square): Point => [
+    PAD + (sq.file - origin.file + SCENARIO_WINDOW.left) * CELL,
+    PAD + (origin.rank + SCENARIO_WINDOW.ahead - sq.rank) * CELL,
+  ];
+  const center = (sq: Square): Point => {
+    const [x, y] = corner(sq);
+    return [x + CELL / 2, y + CELL / 2];
+  };
+  const fills: string[] = [];
+  const marks: string[] = [];
+  for (let dr = SCENARIO_WINDOW.ahead; dr >= -SCENARIO_WINDOW.back; dr--) {
+    for (let df = -SCENARIO_WINDOW.left; df <= SCENARIO_WINDOW.right; df++) {
+      const sq = { file: origin.file + df, rank: origin.rank + dr };
+      const key = squareKey(sq);
+      const [x, y] = corner(sq);
+      const landing = diagram.landings.get(key);
+      const isBlocker = key === squareKey(diagram.blocker);
+      if (landing && !landing.blocked)
+        fills.push(rect(x, y, CELL, CELL, COLORS.tier[landing.tier]));
+      if (landing?.blocked) fills.push(rect(x, y, CELL, CELL, SCENARIO_COLORS.blocked));
+      if (isBlocker) marks.push(blockerMark([x, y], scenario.height, landing !== undefined));
+      else if (landing?.blocked) marks.push(blockedMark([x, y]));
+      else if (landing) marks.push(ring(center(sq)));
+      else if (diagram.passed.has(key)) marks.push(cross(center(sq)));
+    }
+  }
+  const lines: string[] = [];
+  for (let i = 1; i < cols; i++) lines.push(`M${PAD + i * CELL} ${PAD}V${PAD + rows * CELL}`);
+  for (let i = 1; i < rows; i++) lines.push(`M${PAD} ${PAD + i * CELL}H${PAD + cols * CELL}`);
+  const glyph = PIECE_GLYPHS.archer;
+  const label = `${glyph}: ${scenario.tier} 段目 / ■: 敵の ${scenario.height} 段のスタック（${glyph}より高い）`;
+  return svgDocument(width, height, `公式図 ${scenario.id}: ${glyph}の跳を塞ぐスタック`, [
+    rect(PAD, PAD, cols * CELL, rows * CELL, COLORS.board),
+    ...fills,
+    `<path d="${lines.join('')}" stroke="${COLORS.grid}" stroke-width="1" fill="none"/>`,
+    `<rect x="${PAD}" y="${PAD}" width="${cols * CELL}" height="${rows * CELL}" fill="none" stroke="${COLORS.grid}" stroke-width="2"/>`,
+    ...marks,
+    pieceDisc(center(origin), glyph),
+    `<text x="${PAD}" y="${PAD + rows * CELL + caption / 2 + 4}" fill="${COLORS.text}" font-family="${LABEL_FONT}" font-size="12" dominant-baseline="central">${escapeXml(label)}</text>`,
+  ]);
+}
+
+export const archerBlockImagePath = (id: ArcherBlockScenario['id']): string =>
+  `pieces/archer-block-${id}.svg`;
+
+// ---------------------------------------------------------------------------
 // Markdown
 // ---------------------------------------------------------------------------
 
@@ -424,5 +616,7 @@ export function renderPiecesFiles(): ReadonlyMap<string, string> {
   files.set(LEGEND_IMAGE_PATH, renderLegendSvg());
   for (const kind of PIECE_KINDS)
     files.set(piecesImagePath(kind), renderPieceSvg(pieceDiagram(kind)));
+  for (const scenario of ARCHER_BLOCK_SCENARIOS)
+    files.set(archerBlockImagePath(scenario.id), renderScenarioSvg(archerBlockDiagram(scenario)));
   return files;
 }

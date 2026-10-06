@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="304" height="206" viewBox="0 0 304 206" role="img">
+<title>公式図 2: 弓の跳を塞ぐスタック</title>
+<rect x="12" y="12" width="280" height="160" fill="#f2d8a7"/>
+<rect x="52" y="12" width="40" height="40" fill="#2b6cb0"/>
+<rect x="132" y="12" width="40" height="40" fill="#2b6cb0"/>
+<rect x="212" y="12" width="40" height="40" fill="#d4cfc6"/>
+<rect x="92" y="52" width="40" height="40" fill="#a6d8e8"/>
+<rect x="132" y="52" width="40" height="40" fill="#a6d8e8"/>
+<rect x="172" y="52" width="40" height="40" fill="#a6d8e8"/>
+<path d="M52 12V172M92 12V172M132 12V172M172 12V172M212 12V172M252 12V172M12 52H292M12 92H292M12 132H292" stroke="#5c4630" stroke-width="1" fill="none"/>
+<rect x="12" y="12" width="280" height="160" fill="none" stroke="#5c4630" stroke-width="2"/>
+<circle cx="72" cy="32" r="6" fill="#ffffff" stroke="#1a202c" stroke-width="1.5"/>
+<circle cx="152" cy="32" r="6" fill="#ffffff" stroke="#1a202c" stroke-width="1.5"/>
+<circle cx="232" cy="32" r="6" fill="#ffffff" stroke="#8a8a8a" stroke-width="1.5"/><path d="M217 47L247 17" stroke="#d62828" stroke-width="3" stroke-linecap="round"/>
+<circle cx="112" cy="72" r="6" fill="#ffffff" stroke="#1a202c" stroke-width="1.5"/>
+<circle cx="152" cy="72" r="6" fill="#ffffff" stroke="#1a202c" stroke-width="1.5"/>
+<rect x="176" y="56" width="32" height="32" rx="4" fill="#3d3d3d"/><text x="192" y="68" fill="#ffffff" font-family="'Hiragino Sans','Yu Gothic','Noto Sans CJK JP','Noto Sans JP',system-ui,sans-serif" font-size="14" text-anchor="middle" dominant-baseline="central">■</text><text x="192" y="82" fill="#ffffff" font-family="'Hiragino Sans','Yu Gothic','Noto Sans CJK JP','Noto Sans JP',system-ui,sans-serif" font-size="9" text-anchor="middle" dominant-baseline="central">3段</text><circle cx="205" cy="59" r="5" fill="#ffffff" stroke="#1a202c" stroke-width="1.5"/>
+<path d="M105 105L119 119M119 105L105 119" stroke="#6b6b6b" stroke-width="2.5" stroke-linecap="round"/>
+<path d="M145 105L159 119M159 105L145 119" stroke="#6b6b6b" stroke-width="2.5" stroke-linecap="round"/>
+<path d="M185 105L199 119M199 105L185 119" stroke="#6b6b6b" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="152" cy="152" r="16" fill="#1f1f1f"/><text x="152" y="152" fill="#ffffff" font-family="'Hiragino Mincho ProN','Yu Mincho','Noto Serif CJK JP','Noto Serif JP',serif" font-size="20" font-weight="bold" text-anchor="middle" dominant-baseline="central">弓</text>
+<text x="12" y="187" fill="#1a202c" font-family="'Hiragino Sans','Yu Gothic','Noto Sans CJK JP','Noto Sans JP',system-ui,sans-serif" font-size="12" dominant-baseline="central">弓: 2 段目 / ■: 敵の 3 段のスタック（弓より高い）</text>
+</svg>
