@@ -37,7 +37,8 @@ export type {
 export { MoveError, PIECE_KINDS } from './types';
 
 export { PIECE_GLYPHS, ROSTER, opponent } from './pieces';
-export { getStack, topPiece, isInDropZone, isInTerritory } from './board';
+export { getStack, topPiece, isInTerritory } from './board';
+export { frontLineRank, isInDropZone } from './drops';
 export { MOVE_RULES, reachableSquares } from './movement';
 export type { Direction, MoveRule } from './movement';
 export { createInitialState } from './setup';

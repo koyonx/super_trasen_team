@@ -2,11 +2,31 @@
  * Drops from hand (新, §8).
  */
 
-import { allSquares, isInDropZone, isValidSquare, setStack, getStack } from './board';
+import { allSquares, getStack, isValidSquare, setStack } from './board';
 import { isPieceKind, opponent, withHandDelta } from './pieces';
 import { placingError } from './placing';
-import type { DropMove, GameState, PlayerSide } from './types';
+import type { Board, DropMove, GameState, PlayerSide } from './types';
 import { MoveError, PIECE_KINDS } from './types';
+
+/**
+ * §8.2 the most advanced rank holding any piece of `side`, buried pieces
+ * included (R-5), or `null` if the side has no piece on the board.
+ */
+export function frontLineRank(board: Board, side: PlayerSide): number | null {
+  let front: number | null = null;
+  for (const sq of allSquares()) {
+    if (!getStack(board, sq).some((p) => p.owner === side)) continue;
+    if (front === null || (side === 'black' ? sq.rank > front : sq.rank < front)) front = sq.rank;
+  }
+  return front;
+}
+
+/** §8.2 whether `rank` lies between the side's back rank and its front line. */
+export function isInDropZone(board: Board, side: PlayerSide, rank: number): boolean {
+  const front = frontLineRank(board, side);
+  if (front === null) return false;
+  return side === 'black' ? rank <= front : rank >= front;
+}
 
 export function validateDrop(state: GameState, move: DropMove): MoveError | null {
   if (state.phase !== 'play') return MoveError.WRONG_PHASE;
@@ -14,9 +34,9 @@ export function validateDrop(state: GameState, move: DropMove): MoveError | null
   if (!isPieceKind(move.kind)) return MoveError.INVALID_MOVE;
   if (!isValidSquare(move.to)) return MoveError.INVALID_SQUARE;
   if (state.hands[move.player][move.kind] <= 0) return MoveError.NOT_IN_HAND;
-  if (!isInDropZone(move.player, move.to.rank)) return MoveError.OUTSIDE_DROP_ZONE;
-  // §8.3 the top may be an enemy piece; no capture happens.
-  return placingError(state.board, move.to);
+  if (!isInDropZone(state.board, move.player, move.to.rank)) return MoveError.OUTSIDE_DROP_ZONE;
+  // §8.3 empty squares and own stacks only; no height condition.
+  return placingError(state.board, move.player, move.to);
 }
 
 /** Applies a validated drop. */
@@ -40,9 +60,12 @@ export function dropMoves(state: GameState, side: PlayerSide): DropMove[] {
   const hand = state.hands[side];
   const kinds = PIECE_KINDS.filter((k) => hand[k] > 0);
   if (kinds.length === 0) return [];
+  const front = frontLineRank(state.board, side);
+  if (front === null) return [];
   const moves: DropMove[] = [];
   for (const to of allSquares()) {
-    if (!isInDropZone(side, to.rank) || placingError(state.board, to) !== null) continue;
+    if (side === 'black' ? to.rank > front : to.rank < front) continue;
+    if (placingError(state.board, side, to) !== null) continue;
     for (const kind of kinds) moves.push({ type: 'drop', player: side, kind, to });
   }
   return moves;

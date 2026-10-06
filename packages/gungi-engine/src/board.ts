@@ -65,11 +65,6 @@ export function isInTerritory(side: PlayerSide, rank: number): boolean {
   return side === 'black' ? rank >= 0 && rank <= 2 : rank >= 6 && rank < BOARD_SIZE;
 }
 
-/** §2.4 whether the rank lies in the side's drop zone (its own six ranks). */
-export function isInDropZone(side: PlayerSide, rank: number): boolean {
-  return side === 'black' ? rank >= 0 && rank <= 5 : rank >= 3 && rank < BOARD_SIZE;
-}
-
 /** All squares in row-major order. */
 export function allSquares(): Square[] {
   const out: Square[] = [];

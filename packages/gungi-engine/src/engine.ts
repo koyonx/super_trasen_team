@@ -107,8 +107,9 @@ function pseudoMoves(state: GameState): GameMove[] {
 /**
  * §10.1 whether the move keeps the mover's marshal out of reach.
  * `inCheck` is the mover's check status before the move. Fast path: putting a
- * piece from hand on top of a stack can only block lines and cover enemy
- * pieces, so it never exposes the marshal when it is not already attacked.
+ * piece from hand on an empty square or an own stack can only block lines and
+ * raise stacks that jumps pass over (§5.4), so it never exposes the marshal
+ * when it is not already attacked.
  */
 function keepsMarshalSafe(state: GameState, move: GameMove, inCheck: boolean): boolean {
   if ((move.type === 'place' || move.type === 'drop') && !inCheck) return true;

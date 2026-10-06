@@ -206,8 +206,18 @@ describe('§11.2 checkmate', () => {
     expect(legalMoves(next)).toEqual([]);
   });
 
-  it('§8.2 a hand piece dropped inside the six-rank zone can block, preventing mate', () => {
+  it('§8.2 a hand piece cannot block beyond the front line', () => {
     const s = createPosition({ stacks: MATE_NET, hands: { black: { pawn: 1 } }, turn: 'white' });
+    const next = play(s, MATING_MOVE);
+    expect(next.result).toEqual({ winner: 'white', reason: 'checkmate' });
+  });
+
+  it('§8.2 a hand piece dropped up to the front line can block, preventing mate', () => {
+    const s = createPosition({
+      stacks: [...MATE_NET, at(3, 3, B('pawn'))],
+      hands: { black: { pawn: 1 } },
+      turn: 'white',
+    });
     const next = play(s, MATING_MOVE);
     expect(next.result).toBeNull();
     const drop = (rank: number): Move => ({
@@ -216,7 +226,26 @@ describe('§11.2 checkmate', () => {
       kind: 'pawn',
       to: sq(0, rank),
     });
-    expect(legalMoves(next)).toEqual([drop(1), drop(2), drop(3), drop(4), drop(5)]);
+    // (0, 4) is beyond the front line and (0, 5) holds the checking general.
+    expect(legalMoves(next)).toEqual([drop(1), drop(2), drop(3)]);
+  });
+
+  it('§8.3 a drop may deliver mate', () => {
+    // White's pawn on (3, 1) puts its front line on rank 1.
+    const s = createPosition({
+      stacks: [
+        at(0, 0, B('marshal')),
+        at(7, 6, W('lieutenant')),
+        at(1, 6, W('pawn'), W('pawn'), W('cannon')),
+        at(3, 1, W('pawn')),
+        at(8, 8, W('marshal')),
+      ],
+      hands: { white: { lancer: 1 } },
+      turn: 'white',
+    });
+    expect(inCheck({ ...s, turn: 'black' })).toBe(false);
+    const next = play(s, { type: 'drop', player: 'white', kind: 'lancer', to: sq(0, 2) });
+    expect(next.result).toEqual({ winner: 'white', reason: 'checkmate' });
   });
 });
 
@@ -284,7 +313,7 @@ describe('§11.4 fifty-move rule', () => {
       hands: { black: { general: 1 } },
       quietPlies: QUIET_PLY_LIMIT,
     });
-    const next = play(s, { type: 'drop', player: 'black', kind: 'general', to: sq(3, 3) });
+    const next = play(s, { type: 'drop', player: 'black', kind: 'general', to: sq(3, 0) });
     expect(next.quietPlies).toBe(0);
     expect(next.result).toBeNull();
   });

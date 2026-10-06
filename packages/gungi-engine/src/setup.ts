@@ -63,7 +63,7 @@ export function validatePlace(state: GameState, move: PlaceMove): MoveError | nu
     return MoveError.MARSHAL_FIRST;
   }
   if (!isInTerritory(move.player, move.to.rank)) return MoveError.OUTSIDE_TERRITORY;
-  return placingError(state.board, move.to);
+  return placingError(state.board, move.player, move.to);
 }
 
 export function validateFinishPlacement(
