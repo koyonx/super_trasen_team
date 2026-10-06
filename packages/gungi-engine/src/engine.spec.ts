@@ -6,8 +6,8 @@ import { createPosition, stateError } from './position';
 import { REPETITION_LIMIT, positionKey } from './repetition';
 import { createInitialState } from './setup';
 import { B, W, at, rng, sq } from './test-helpers';
-import type { BoardMove, GameState, Move, PieceKind, PlayerSide } from './types';
-import { MoveError } from './types';
+import type { BoardMove, GameState, Move, PieceKind, PlayerSide, Square } from './types';
+import { MoveError, PIECE_KINDS } from './types';
 
 const mv = (
   type: BoardMove['type'],
@@ -512,6 +512,7 @@ describe('§12.2 malformed input', () => {
           kind: pick(kinds),
           from: pick(squares),
           to: pick(squares),
+          betray: pick([undefined, undefined, true, false, 1, 'true', null]),
         };
         const error = validateMove(state, move as unknown as Move);
         expect(error === null || Object.values(MoveError).includes(error)).toBe(true);
@@ -715,32 +716,121 @@ function checkInvariants(state: GameState): void {
   }
 }
 
+/** Picks a move type uniformly first, so rare kinds (betrayal, capture) get played. */
+function pickMove(moves: Move[], rand: () => number): Move {
+  const group = (m: Move) => (m.type === 'stack' && m.betray ? 'betray' : m.type);
+  const groups = [...new Set(moves.map(group))];
+  // Prefer finishing placement sometimes so the play phase is reached.
+  const chosen =
+    groups.includes('finishPlacement') && rand() < 0.15
+      ? 'finishPlacement'
+      : groups[Math.floor(rand() * groups.length)]!;
+  const pool = moves.filter((m) => group(m) === chosen);
+  return pool[Math.floor(rand() * pool.length)]!;
+}
+
+/** Self-play from the initial state, calling `visit` with every state reached. */
+function selfPlay(seed: number, plies: number, visit: (s: GameState, m: Move) => void): GameState {
+  const rand = rng(seed);
+  // Odd seeds play black first, even seeds white first (§9.1).
+  let state = createInitialState({ firstPlayer: seed % 2 === 1 ? 'black' : 'white' });
+  for (let i = 0; i < plies && !isGameOver(state); i++) {
+    const moves = legalMoves(state);
+    expect(moves.length).toBeGreaterThan(0);
+    // A few other generated moves must validate as well.
+    for (let k = 0; k < 2; k++) {
+      expect(validateMove(state, moves[Math.floor(rand() * moves.length)]!)).toBeNull();
+    }
+    const move = pickMove(moves, rand);
+    const result = applyMove(state, move);
+    expect(result.ok).toBe(true);
+    if (!result.ok) break;
+    state = result.state;
+    visit(state, move);
+  }
+  return state;
+}
+
 describe('random self-play invariants', () => {
-  it.each([1, 2, 3, 4, 5, 6])(
+  const seen = new Set<string>();
+
+  it.each([1, 2, 3, 4, 5, 6, 7, 8])(
     'seed %i: every legal move applies and invariants hold',
     (seed) => {
-      const rand = rng(seed);
-      // Odd seeds play black first, even seeds white first (§9.1).
-      let state = createInitialState({ firstPlayer: seed % 2 === 1 ? 'black' : 'white' });
-      for (let i = 0; i < 400 && !isGameOver(state); i++) {
-        const moves = legalMoves(state);
-        expect(moves.length).toBeGreaterThan(0);
-        // A few other generated moves must validate as well.
-        for (let k = 0; k < 2; k++) {
-          expect(validateMove(state, moves[Math.floor(rand() * moves.length)]!)).toBeNull();
-        }
-        // Prefer finishing placement early sometimes so the play phase is reached.
-        const finishMove = moves.find((m) => m.type === 'finishPlacement');
-        const move =
-          finishMove && rand() < 0.15 ? finishMove : moves[Math.floor(rand() * moves.length)]!;
-        const result = applyMove(state, move);
-        expect(result.ok).toBe(true);
-        if (!result.ok) break;
-        state = result.state;
+      const end = selfPlay(seed, 400, (state, move) => {
         checkInvariants(state);
-      }
-      if (isGameOver(state)) expect(legalMoves(state)).toEqual([]);
+        seen.add(move.type === 'stack' && move.betray ? 'betray' : move.type);
+        if (state.phase === 'play') seen.add('play');
+        if (state.result) seen.add(state.result.reason);
+      });
+      if (isGameOver(end)) expect(legalMoves(end)).toEqual([]);
     },
     30_000,
+  );
+
+  it('the seeds above exercise every kind of move', () => {
+    for (const kind of ['place', 'finishPlacement', 'move', 'capture', 'stack', 'drop', 'betray']) {
+      expect(seen).toContain(kind);
+    }
+    expect(seen).toContain('play');
+  });
+});
+
+/** A canonical string for a move, so generated and hand-built moves compare equal. */
+function moveId(m: Move): string {
+  const r = m as Partial<Record<string, unknown>> & Move;
+  const sqId = (v: unknown) => (v ? `${(v as Square).file},${(v as Square).rank}` : '');
+  return [r.type, r.player ?? '', r.kind ?? '', sqId(r.from), sqId(r.to), r.betray ? 'b' : ''].join(
+    '|',
+  );
+}
+
+/** Every move of the side to move that could possibly be legal in `state`. */
+function candidateMoves(state: GameState): Move[] {
+  const player = state.turn;
+  const squares = allSquares();
+  if (state.phase === 'placement') {
+    return [
+      { type: 'finishPlacement', player },
+      ...squares.flatMap((to) =>
+        PIECE_KINDS.map((kind): Move => ({ type: 'place', player, kind, to })),
+      ),
+    ];
+  }
+  const board = squares.flatMap((from) =>
+    squares.flatMap((to) =>
+      (['move', 'capture', 'stack'] as const).flatMap((type): Move[] => [
+        { type, player, from, to },
+        { type, player, from, to, betray: true },
+      ]),
+    ),
+  );
+  const drops = squares.flatMap((to) =>
+    PIECE_KINDS.map((kind): Move => ({ type: 'drop', player, kind, to })),
+  );
+  return [...board, ...drops];
+}
+
+describe('§12 legalMoves is exactly the set of moves validateMove accepts', () => {
+  it.each([11, 12])(
+    'seed %i: sampled placement and play states',
+    (seed) => {
+      const samples: GameState[] = [];
+      let n = 0;
+      selfPlay(seed, 160, (state) => {
+        if (!isGameOver(state) && n++ % 20 === 5) samples.push(state);
+      });
+      expect(samples.some((s) => s.phase === 'play')).toBe(true);
+      for (const state of samples) {
+        const legal = new Set(legalMoves(state).map(moveId));
+        const accepted = new Set(
+          candidateMoves(state)
+            .filter((m) => validateMove(state, m) === null)
+            .map(moveId),
+        );
+        expect([...accepted].sort()).toEqual([...legal].sort());
+      }
+    },
+    60_000,
   );
 });
