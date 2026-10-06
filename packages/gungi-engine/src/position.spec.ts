@@ -120,6 +120,15 @@ describe('§12.1 createPosition invariants', () => {
     );
   });
 
+  it('§9.1 records the first player, black by default', () => {
+    expect(createPosition({ stacks: KINGS }).firstPlayer).toBe('black');
+    expect(createPosition({ stacks: KINGS, firstPlayer: 'white' }).firstPlayer).toBe('white');
+    expectRejected(
+      { stacks: KINGS, firstPlayer: 'red' as unknown as 'black' },
+      PositionError.INVALID_TURN,
+    );
+  });
+
   it('rejects negative or fractional counts and a bad turn', () => {
     expectRejected({ stacks: KINGS, hands: { white: { pawn: -1 } } }, PositionError.INVALID_COUNT);
     expectRejected({ stacks: KINGS, hands: { white: { pawn: 1.5 } } }, PositionError.INVALID_COUNT);
@@ -151,19 +160,17 @@ describe('§12.1 the side not to move is never in check', () => {
     );
   });
 
-  it('§11.1 accepts white to move with black in check at the start of play', () => {
-    // Black finished placing first; white's last placement attacks black's marshal.
-    expect(positionError({ stacks: checked, turn: 'white' })).toBeNull();
-  });
-
-  it('rejects that position once a quiet ply has been played', () => {
+  it('has no play-start exception: white to move with black in check is rejected', () => {
+    // Play starts with the first player to move, and the second player cannot
+    // end placement while in check (§9.5), whoever moves first.
+    expectRejected({ stacks: checked, turn: 'white' }, PositionError.OPPONENT_IN_CHECK);
     expectRejected(
-      { stacks: checked, turn: 'white', quietPlies: 1 },
+      { stacks: checked, turn: 'white', firstPlayer: 'white' },
       PositionError.OPPONENT_IN_CHECK,
     );
   });
 
-  it('rejects it when white is in check as well (§9.5 white could not have finished)', () => {
+  it('rejects it when white is in check as well', () => {
     expectRejected(
       {
         stacks: [
@@ -471,9 +478,11 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
   it('§9 checks placement-phase states', () => {
     const initial = createInitialState();
     // §9.2 nothing is placed before the marshal.
-    expect(stateError(restored(initial, { board: boardWith(initial, 4, 1, [B('pawn')]) }))).toBe(
-      PositionError.MARSHAL_COUNT,
-    );
+    expect(
+      stateError(
+        restored(initial, { board: boardWith(initial, 4, 1, [B('pawn')]), turn: 'white' }),
+      ),
+    ).toBe(PositionError.MARSHAL_COUNT);
     // §9.4 the turn never goes to a side that has finished placing.
     expect(stateError(restored(initial, { placementDone: { black: true, white: false } }))).toBe(
       PositionError.INVALID_TURN,
@@ -490,21 +499,42 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
   });
 
   it('§10.1 allows the side not to move in check only where a game allows it', () => {
-    // Black's marshal on (4, 2) is attacked by a white tier-3 cannon on (4, 6).
+    // Black's marshal on (4, 2) is attacked by the white general on (4, 6).
     const checked = createPosition({
       stacks: [at(4, 2, B('marshal')), at(4, 6, W('general')), KINGS[1]!],
-      turn: 'white',
     });
     expect(stateError(restored(checked))).toBeNull();
-    // Not after a capture has been played.
-    expect(stateError(restored(checked, { captured: { black: [], white: ['pawn'] } }))).toBe(
+    // Never in play, whoever moved first.
+    expect(stateError(restored(checked, { turn: 'white' }))).toBe(PositionError.OPPONENT_IN_CHECK);
+    expect(stateError(restored(checked, { turn: 'white', firstPlayer: 'white' }))).toBe(
       PositionError.OPPONENT_IN_CHECK,
     );
-    // §9.5 in placement, once black has finished white may keep placing checks.
-    const placing = { phase: 'placement', placementDone: { black: true, white: false } };
+    // §9.5 in placement, once black (first) has finished white may keep placing checks.
+    const hands = {
+      black: { ...checked.hands.black, pawn: 1 },
+      white: { ...checked.hands.white, pawn: 1 },
+    };
+    const placing = {
+      phase: 'placement',
+      turn: 'white',
+      hands,
+      placementDone: { black: true, white: false },
+    };
     expect(stateError(restored(checked, placing))).toBeNull();
     expect(
-      stateError(restored(checked, { ...placing, placementDone: { black: false, white: false } })),
+      stateError(
+        restored(checked, {
+          ...placing,
+          // Two more black pawns: black has placed one piece more, so white is to move.
+          board: boardWith(
+            { ...checked, board: boardWith(checked, 0, 1, [B('pawn')]) as GameState['board'] },
+            1,
+            1,
+            [B('pawn')],
+          ),
+          placementDone: { black: false, white: false },
+        }),
+      ),
     ).toBe(PositionError.OPPONENT_IN_CHECK);
     // A finished game may end in any position (e.g. resigned while in check).
     expect(
@@ -518,67 +548,86 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
     ).toBeNull();
   });
 
-  describe('§11.1 the play-start exception needs a play-start ply count', () => {
-    const tower = [W('general')];
-    /** Black's marshal on (4, 2), checked by the white general on (4, 6). */
-    const fromPosition = createPosition({
-      stacks: [at(4, 2, B('marshal')), at(4, 6, ...tower), KINGS[1]!],
-      hands: { white: { pawn: 3 } },
-      turn: 'white',
-    });
-
-    /** The same check reached by actual placement: black finishes first, white places on. */
-    function fromPlacement(): GameState {
-      let s = createInitialState();
+  describe('§9.6 play-start positions after an early finish (即死筋)', () => {
+    /** The first player finishes after placing its marshal; the second player then checks it. */
+    function earlyFinish(firstPlayer: 'black' | 'white'): GameState {
+      let s = createInitialState({ firstPlayer });
       const play = (move: Parameters<typeof applyMove>[1]) => {
         const r = applyMove(s, move);
         if (!r.ok) throw new Error(r.error);
         s = r.state;
       };
-      play({ type: 'place', player: 'black', kind: 'marshal', to: sq(4, 2) });
-      play({ type: 'place', player: 'white', kind: 'marshal', to: sq(8, 8) });
-      play({ type: 'finishPlacement', player: 'black' });
-      play({ type: 'place', player: 'white', kind: 'general', to: sq(4, 6) });
-      play({ type: 'finishPlacement', player: 'white' });
+      const second = firstPlayer === 'black' ? 'white' : 'black';
+      const marshal = (side: 'black' | 'white') => sq(4, side === 'black' ? 2 : 6);
+      play({ type: 'place', player: firstPlayer, kind: 'marshal', to: marshal(firstPlayer) });
+      play({
+        type: 'place',
+        player: second,
+        kind: 'marshal',
+        to: sq(8, second === 'black' ? 0 : 8),
+      });
+      play({ type: 'finishPlacement', player: firstPlayer });
+      play({ type: 'place', player: second, kind: 'general', to: marshal(second) });
       return s;
     }
 
-    it('accepts both legitimate play-start shapes', () => {
-      expect(fromPosition.ply).toBe(0);
-      expect(stateError(restored(fromPosition))).toBeNull();
-      const placed = fromPlacement();
-      expect(placed).toMatchObject({ phase: 'play', turn: 'white', ply: 5, quietPlies: 0 });
-      expect(inCheck({ ...placed, turn: 'black' })).toBe(true);
-      // 3 pieces on the board + 2 finishPlacement plies.
-      expect(stateError(restored(placed))).toBeNull();
-    });
+    it.each(['black', 'white'] as const)(
+      'first player %s: placement and play-start positions in check are accepted',
+      (firstPlayer) => {
+        const placing = earlyFinish(firstPlayer);
+        expect(placing.phase).toBe('placement');
+        expect(inCheck({ ...placing, turn: firstPlayer })).toBe(true);
+        expect(stateError(restored(placing))).toBeNull();
+        const r = applyMove(placing, {
+          type: 'finishPlacement',
+          player: firstPlayer === 'black' ? 'white' : 'black',
+        });
+        expect(r.ok).toBe(true);
+        if (!r.ok) return;
+        expect(r.state).toMatchObject({ phase: 'play', turn: firstPlayer });
+        expect(inCheck(r.state)).toBe(true);
+        expect(stateError(restored(r.state))).toBeNull();
+        // The same board with the checking side to move is not reachable.
+        expect(
+          stateError(restored(r.state, { turn: firstPlayer === 'black' ? 'white' : 'black' })),
+        ).toBe(PositionError.OPPONENT_IN_CHECK);
+      },
+    );
+  });
 
-    it('rejects a mid-game ply count with a reset quiet-ply counter', () => {
-      // A drop resets quietPlies, so quietPlies 0 alone does not mean play just started;
-      // white would otherwise be allowed to capture black's marshal.
-      expect(stateError(restored(fromPosition, { ply: 40, quietPlies: 0 }))).toBe(
-        PositionError.OPPONENT_IN_CHECK,
-      );
-      expect(stateError(restored(fromPlacement(), { ply: 8 }))).toBe(
-        PositionError.OPPONENT_IN_CHECK,
-      );
+  it('§9.3 / §9.4 checks the placement turn order for either first player', () => {
+    const initial = createInitialState();
+    const whiteFirst = createInitialState({ firstPlayer: 'white' });
+    expect(stateError(restored(whiteFirst))).toBeNull();
+    // Before anything is placed the first player is to move.
+    expect(stateError(restored(initial, { turn: 'white' }))).toBe(PositionError.INVALID_TURN);
+    expect(stateError(restored(whiteFirst, { turn: 'black' }))).toBe(PositionError.INVALID_TURN);
+    // The second player finishing would have ended the phase.
+    expect(
+      stateError(
+        restored(whiteFirst, { turn: 'white', placementDone: { black: true, white: false } }),
+      ),
+    ).toBe(PositionError.INVALID_PHASE);
+    // After one placement by the first player it is the second player's turn.
+    const one = applyMove(whiteFirst, {
+      type: 'place',
+      player: 'white',
+      kind: 'marshal',
+      to: sq(4, 8),
     });
-
-    it('rejects drops played after quiet moves in a forged history', () => {
-      // Three white pawns dropped (3 plies, 3 pieces) after two quiet moves (2 plies):
-      // the counter is back to 0 but the ply count no longer matches the pieces.
-      const placed = fromPlacement();
-      let board = placed.board;
-      for (const file of [0, 1, 2]) board = boardWithPiece(board, file, 5, W('pawn'));
-      const forged = restored(placed, {
-        board,
-        hands: { ...placed.hands, white: { ...placed.hands.white, pawn: 1 } },
-        ply: placed.ply + 5,
-      });
-      expect(stateError(forged)).toBe(PositionError.OPPONENT_IN_CHECK);
-      // Necessary only: drops alone keep ply = pieces + 2, so the same board passes.
-      expect(stateError({ ...(forged as object), ply: placed.ply + 3 })).toBeNull();
-    });
+    expect(one.ok && stateError(restored(one.state))).toBeNull();
+    if (one.ok) {
+      expect(stateError(restored(one.state, { turn: 'white' }))).toBe(PositionError.INVALID_TURN);
+      expect(stateError(restored(one.state, { firstPlayer: 'black' }))).toBe(
+        PositionError.INVALID_TURN,
+      );
+    }
+    // A side with nothing left in hand has finished.
+    const empty = Object.fromEntries(Object.keys(initial.hands.black).map((k) => [k, 0]));
+    expect(stateError(restored(initial, { hands: { ...initial.hands, white: empty } }))).toBe(
+      PositionError.INVALID_PHASE,
+    );
+    expect(stateError(restored(initial, { firstPlayer: 'red' }))).toBe(PositionError.INVALID_TURN);
   });
 
   it.each([1, 2, 3])('seed %i: never throws on randomly corrupted states', (seed) => {
@@ -616,12 +665,6 @@ describe('§12.1 stateError (restoring a state from storage or the network)', ()
 });
 
 /** A copy of `board` with `piece` put on top of the stack at (file, rank). */
-function boardWithPiece(board: GameState['board'], file: number, rank: number, piece: Piece) {
-  return board.map((row, r) =>
-    row.map((stack, f) => (f === file && r === rank ? [...stack, piece] : stack)),
-  );
-}
-
 function isObject(value: unknown): value is object {
   return typeof value === 'object' && value !== null;
 }

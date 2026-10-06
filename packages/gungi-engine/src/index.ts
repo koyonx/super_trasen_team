@@ -42,6 +42,7 @@ export { frontLineRank, isInDropZone } from './drops';
 export { MOVE_RULES, reachableSquares } from './movement';
 export type { Direction, MoveRule } from './movement';
 export { createInitialState } from './setup';
+export type { InitialStateOptions } from './setup';
 export {
   InvalidPositionError,
   PositionError,

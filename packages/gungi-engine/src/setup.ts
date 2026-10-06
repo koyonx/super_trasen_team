@@ -14,20 +14,34 @@ import {
   isValidSquare,
   setStack,
 } from './board';
-import { ROSTER, isPieceKind, opponent, withHandDelta } from './pieces';
+import { ROSTER, handTotal, isPieceKind, opponent, withHandDelta } from './pieces';
 import { placingError } from './placing';
 import type { FinishPlacementMove, GameState, PieceKind, PlaceMove, PlayerSide } from './types';
 import { MoveError, PIECE_KINDS } from './types';
 
 export type PlacementMove = PlaceMove | FinishPlacementMove;
 
-/** §9.1 empty board, full hands, black to place. */
-export function createInitialState(): GameState {
+export interface InitialStateOptions {
+  /**
+   * §9.1 the side that places first and moves first in play (先手). The
+   * official rules decide it by a ritual the server or UI reproduces; the
+   * result is passed in here. Defaults to black.
+   */
+  readonly firstPlayer?: PlayerSide;
+}
+
+/** §9.1 empty board, full hands, the first player to place. */
+export function createInitialState(options: InitialStateOptions = {}): GameState {
+  const firstPlayer = options.firstPlayer ?? 'black';
+  if (firstPlayer !== 'black' && firstPlayer !== 'white') {
+    throw new RangeError(`invalid first player: ${String(firstPlayer)}`);
+  }
   return {
     phase: 'placement',
     board: createEmptyBoard(),
     hands: { black: { ...ROSTER }, white: { ...ROSTER } },
-    turn: 'black',
+    turn: firstPlayer,
+    firstPlayer,
     placementDone: { black: false, white: false },
     captured: { black: [], white: [] },
     ply: 0,
@@ -40,15 +54,23 @@ export function hasPlacedMarshal(state: GameState, side: PlayerSide): boolean {
   return findMarshal(state.board, side) !== undefined;
 }
 
-/** §9.4 starts the play phase with white to move. */
+/** §9.4 starts the play phase with the first player to move. */
 function startPlay(state: GameState): GameState {
-  return { ...state, phase: 'play', turn: 'white' };
+  return {
+    ...state,
+    phase: 'play',
+    turn: state.firstPlayer,
+    placementDone: { black: true, white: true },
+  };
 }
 
-/** §9.4 hands the turn to whoever still places, or starts play. */
+/**
+ * §9.3 / §9.4 the second player finishing ends placement for both sides;
+ * otherwise the turn goes to whoever still places.
+ */
 function advancePlacement(state: GameState, mover: PlayerSide): GameState {
   const done = state.placementDone;
-  if (done.black && done.white) return startPlay(state);
+  if (done[opponent(state.firstPlayer)]) return startPlay(state);
   const other = opponent(mover);
   return { ...state, turn: done[other] ? mover : other };
 }
@@ -83,7 +105,7 @@ export function validatePlacementMove(state: GameState, move: PlacementMove): Mo
 /** Applies a validated placement-phase move. */
 export function executePlacementMove(state: GameState, move: PlacementMove): GameState {
   if (move.type === 'finishPlacement') {
-    // §9.3 only the declaring side stops placing; the other side continues alone.
+    // §9.3 the first player stops alone; the second player ends the phase.
     const placementDone = { ...state.placementDone, [move.player]: true };
     return advancePlacement(
       { ...state, placementDone, ply: state.ply + 1, quietPlies: 0 },
@@ -91,13 +113,13 @@ export function executePlacementMove(state: GameState, move: PlacementMove): Gam
     );
   }
   const stack = getStack(state.board, move.to);
+  const hand = withHandDelta(state.hands[move.player], move.kind, -1);
   const placed: GameState = {
     ...state,
     board: setStack(state.board, move.to, [...stack, { kind: move.kind, owner: move.player }]),
-    hands: {
-      ...state.hands,
-      [move.player]: withHandDelta(state.hands[move.player], move.kind, -1),
-    },
+    hands: { ...state.hands, [move.player]: hand },
+    // §9.3 placing the last piece in hand counts as finishing (R-7).
+    placementDone: { ...state.placementDone, [move.player]: handTotal(hand) === 0 },
     ply: state.ply + 1,
     quietPlies: 0,
   };

@@ -45,12 +45,11 @@ describe('§12 public API', () => {
       { type: 'place', player: 'white', kind: 'marshal', to: { file: 4, rank: 8 } },
       { type: 'place', player: 'black', kind: 'pawn', to: { file: 4, rank: 2 } },
       { type: 'finishPlacement', player: 'white' },
-      { type: 'finishPlacement', player: 'black' },
-      { type: 'move', player: 'white', from: { file: 4, rank: 8 }, to: { file: 4, rank: 7 } },
       { type: 'move', player: 'black', from: { file: 4, rank: 2 }, to: { file: 4, rank: 3 } },
+      { type: 'move', player: 'white', from: { file: 4, rank: 8 }, to: { file: 4, rank: 7 } },
       { type: 'resign', player: 'white' },
     ];
-    let state = engine.createInitialState();
+    let state = engine.createInitialState({ firstPlayer: 'black' });
     for (const move of steps) {
       const result = engine.applyMove(state, move);
       expect(result.ok).toBe(true);

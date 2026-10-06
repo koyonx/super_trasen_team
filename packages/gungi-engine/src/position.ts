@@ -1,6 +1,6 @@
 import { BOARD_SIZE, MAX_STACK_HEIGHT } from '@gungi/shared';
 import { allSquares, createEmptyBoard, getStack, isValidSquare, setStack } from './board';
-import { PIECE_GLYPHS, ROSTER, emptyHand, isPieceKind, opponent } from './pieces';
+import { PIECE_GLYPHS, ROSTER, emptyHand, handTotal, isPieceKind, opponent } from './pieces';
 import { isInCheck } from './rules';
 import type {
   Board,
@@ -47,6 +47,8 @@ export interface PositionSetup {
   /** Hand contents; unspecified kinds default to 0. */
   readonly hands?: Partial<Record<PlayerSide, Partial<Hand>>>;
   readonly turn?: PlayerSide;
+  /** §9.1 the first player of the game (default black). Does not affect play-phase rules. */
+  readonly firstPlayer?: PlayerSide;
   /** §11.4 quiet-ply counter to start from (default 0). */
   readonly quietPlies?: number;
 }
@@ -214,18 +216,13 @@ function materialError(
 
 /**
  * §10.1 a move never leaves the mover's marshal attacked, so the side not to
- * move is not in check. The one exception is the first move of the play
- * phase (§11.1): black may finish placing first, after which white can place
- * pieces that attack black's marshal and then finish itself. Such a position
- * has white to move, white not in check (§9.5) and a fresh quiet-ply counter
- * (`finishPlacement` resets it, §11.4); `atPlayStart` tells whether the
- * position can be that one.
+ * move is not in check. In placement the first player may have finished and
+ * then be checked by the second player's placements, which it cannot answer
+ * (§9.5, §9.6); `allowed` tells whether the position is such a one. There is
+ * no exception in play: play starts with the first player to move, and the
+ * second player can only end placement while not in check (§9.3, §9.5), so
+ * the side not to move is never in check, whoever moves first.
  */
-function checkError(board: Board, turn: PlayerSide, atPlayStart: boolean): PositionError | null {
-  return opponentCheckError(board, turn, atPlayStart && turn === 'white');
-}
-
-/** `OPPONENT_IN_CHECK` unless that is allowed here and the side to move is safe. */
 function opponentCheckError(
   board: Board,
   turn: PlayerSide,
@@ -240,14 +237,15 @@ interface ParsedSetup {
   readonly board: Board;
   readonly hands: Readonly<Record<PlayerSide, Hand>>;
   readonly turn: PlayerSide;
+  readonly firstPlayer: PlayerSide;
   readonly quietPlies: number;
 }
 
 /** Parses and validates a setup into fresh data. Never throws. */
 function parseSetup(setup: unknown): Parsed<ParsedSetup> {
   if (!isRecord(setup)) return fail(PositionError.MALFORMED);
-  const { turn = 'black', quietPlies = 0 } = setup;
-  if (!isSide(turn)) return fail(PositionError.INVALID_TURN);
+  const { turn = 'black', firstPlayer = 'black', quietPlies = 0 } = setup;
+  if (!isSide(turn) || !isSide(firstPlayer)) return fail(PositionError.INVALID_TURN);
   if (!isCount(quietPlies)) return fail(PositionError.INVALID_COUNT);
   const board = parseStacks(setup.stacks);
   if (!board.ok) return board;
@@ -257,9 +255,12 @@ function parseSetup(setup: unknown): Parsed<ParsedSetup> {
     boardError(board.value) ??
     // A play-phase position always has both marshals on the board (§9.3, §11.1).
     materialError(board.value, hands.value, NO_CAPTURES, () => true) ??
-    checkError(board.value, turn, quietPlies === 0);
+    opponentCheckError(board.value, turn, false);
   if (error) return fail(error);
-  return { ok: true, value: { board: board.value, hands: hands.value, turn, quietPlies } };
+  return {
+    ok: true,
+    value: { board: board.value, hands: hands.value, turn, firstPlayer, quietPlies },
+  };
 }
 
 /**
@@ -289,12 +290,13 @@ export function positionError(setup: PositionSetup): PositionError | null {
 export function createPosition(setup: PositionSetup): GameState {
   const parsed = parseSetup(setup);
   if (!parsed.ok) throw new InvalidPositionError(parsed.error);
-  const { board, hands, turn, quietPlies } = parsed.value;
+  const { board, hands, turn, firstPlayer, quietPlies } = parsed.value;
   return {
     phase: 'play',
     board,
     hands,
     turn,
+    firstPlayer,
     placementDone: { black: true, white: true },
     captured: { black: [], white: [] },
     ply: 0,
@@ -376,31 +378,54 @@ function resultError(phase: GamePhase, result: unknown): PositionError | null {
 }
 
 /**
+ * §9.3 / §9.4 placement-phase consistency of `placementDone` and the turn.
+ * The second player finishing ends the phase, a side with an empty hand has
+ * finished (R-7), the turn never goes to a side that has finished, and while
+ * neither side has finished every ply was a `place` alternating from the
+ * first player, so the first player has placed as many pieces as the second
+ * (its turn) or one more (the second player's turn).
+ */
+function placementError(
+  board: Board,
+  hands: Readonly<Record<PlayerSide, Hand>>,
+  done: Readonly<Record<PlayerSide, boolean>>,
+  turn: PlayerSide,
+  firstPlayer: PlayerSide,
+): PositionError | null {
+  const second = opponent(firstPlayer);
+  if (done[second]) return PositionError.INVALID_PHASE;
+  if (SIDES.some((side) => !done[side] && handTotal(hands[side]) === 0)) {
+    return PositionError.INVALID_PHASE;
+  }
+  if (done[turn]) return PositionError.INVALID_TURN;
+  if (!done[firstPlayer]) {
+    const lead = countOnBoard(board, firstPlayer) - countOnBoard(board, second);
+    if (lead !== (turn === firstPlayer ? 0 : 1)) return PositionError.INVALID_TURN;
+  }
+  return null;
+}
+
+/**
  * §12.1 why `state` is not a game state the engine can work with, or `null`.
  * Never throws, whatever the input. Use it as the gate before handing a state
  * restored from storage or the network to `applyMove` / `legalMoves`, which
  * assume a well-formed state and may throw on a corrupt one.
  *
  * Checks the shape of every field, the result against the phase, the board
- * invariants of `positionError` and phase-aware material: in placement a
- * side has its marshal once it has placed anything (§9.2), in play both
- * marshals are on the board, and captured pieces count against the roster.
- * The side not to move may be in check in placement once that side has
- * finished (§9.5), and in play at the position right after placement
- * (§11.1). For the latter only necessary conditions are checked: white to
- * move, no quiet ply, no capture yet, and `ply` either 0 (`createPosition`)
- * or the pieces on the board plus 2 (one ply per `place`, one per
- * `finishPlacement`). A forged state can still pass, e.g. one where only
- * capture-free drops followed placement, since each drop also adds one ply
- * and one piece and resets the quiet-ply counter. Like `positionError` it
- * accepts an unconcluded mate, stalemate or quiet-ply counter past the
- * limit, and it does not replay history.
+ * invariants of `positionError`, phase-aware material (in placement a side
+ * has its marshal once it has placed anything (§9.2), in play both marshals
+ * are on the board, and captured pieces count against the roster), the
+ * placement turn order for either first player (`placementError`) and that
+ * the side not to move is not in check. The latter is allowed only in
+ * placement, for a first player that has finished (§9.5, §9.6). Like
+ * `positionError` it accepts an unconcluded mate, stalemate or quiet-ply
+ * counter past the limit, and it does not replay history.
  */
 export function stateError(state: unknown): PositionError | null {
   if (!isRecord(state)) return PositionError.MALFORMED;
-  const { phase, turn } = state;
+  const { phase, turn, firstPlayer } = state;
   if (!PHASES.has(phase)) return PositionError.INVALID_PHASE;
-  if (!isSide(turn)) return PositionError.INVALID_TURN;
+  if (!isSide(turn) || !isSide(firstPlayer)) return PositionError.INVALID_TURN;
   if (!isCount(state.ply) || !isCount(state.quietPlies)) return PositionError.INVALID_COUNT;
   const board = parseBoard(state.board);
   if (!board.ok) return board.error;
@@ -414,13 +439,13 @@ export function stateError(state: unknown): PositionError | null {
   const resultErr = resultError(gamePhase, state.result);
   if (resultErr) return resultErr;
 
-  // §9.3 / §9.4 play starts once both sides have finished placing, and the
-  // turn never goes to a side that has finished.
+  // §9.4 play starts once placement has ended, which marks both sides done.
   const bothDone = done.value.black && done.value.white;
-  if ((gamePhase === 'play' && !bothDone) || (gamePhase === 'placement' && bothDone)) {
-    return PositionError.INVALID_PHASE;
+  if (gamePhase === 'play' && !bothDone) return PositionError.INVALID_PHASE;
+  if (gamePhase === 'placement') {
+    const error = placementError(board.value, hands.value, done.value, turn, firstPlayer);
+    if (error) return error;
   }
-  if (gamePhase === 'placement' && done.value[turn]) return PositionError.INVALID_TURN;
 
   const marshalRequired = (side: PlayerSide): boolean => {
     if (gamePhase === 'play') return true;
@@ -432,17 +457,7 @@ export function stateError(state: unknown): PositionError | null {
     materialError(board.value, hands.value, captured.value, marshalRequired);
   if (error) return error;
 
-  if (gamePhase === 'placement') {
-    return opponentCheckError(board.value, turn, done.value[opponent(turn)]);
-  }
-  if (gamePhase === 'play') {
-    const noCaptures = captured.value.black.length === 0 && captured.value.white.length === 0;
-    // `createPosition` starts at ply 0. `createInitialState` starts there too,
-    // and each `place` adds one ply and one piece, plus one ply per side for
-    // `finishPlacement`, so play starts at ply = pieces on board + 2.
-    const onBoard = countOnBoard(board.value, 'black') + countOnBoard(board.value, 'white');
-    const startPly = state.ply === 0 || state.ply === onBoard + 2;
-    return checkError(board.value, turn, state.quietPlies === 0 && noCaptures && startPly);
-  }
-  return null;
+  if (gamePhase === 'finished') return null;
+  const waiting = gamePhase === 'placement' && done.value[opponent(turn)];
+  return opponentCheckError(board.value, turn, waiting);
 }

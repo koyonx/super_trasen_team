@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getStack } from './board';
-import { handTotal } from './pieces';
+import { emptyHand, handTotal } from './pieces';
 import {
   createInitialState,
   executePlacementMove,
@@ -28,6 +28,9 @@ function run(state: GameState, ...moves: PlacementMove[]): GameState {
 }
 
 const errorOf = (state: GameState, move: PlacementMove) => validatePlacementMove(state, move);
+
+/** A hand holding a single piece of `kind`. */
+const oneLeft = (kind: PieceKind) => ({ ...emptyHand(), [kind]: 1 });
 
 /** Both marshals placed, black to move. */
 const withMarshals = () =>
@@ -142,6 +145,7 @@ describe('§9.2 place', () => {
 
   it('rejects placement during play', () => {
     const s = run(withMarshals(), finish('black'), finish('white'));
+    expect(s.phase).toBe('play');
     expect(errorOf(s, place('black', 'pawn', 0, 0))).toBe(MoveError.WRONG_PHASE);
     expect(errorOf(s, finish('black'))).toBe(MoveError.WRONG_PHASE);
   });
@@ -167,33 +171,98 @@ describe('§9.3 finishPlacement', () => {
     expect(errorOf(s, place('black', 'pawn', 0, 0))).toBe(MoveError.NOT_YOUR_TURN);
   });
 
-  it('white finishing first lets black keep placing alone', () => {
-    let s = run(withMarshals(), place('black', 'pawn', 0, 0), finish('white'));
-    expect(s.phase).toBe('placement');
-    expect(s.placementDone).toEqual({ black: false, white: true });
-    expect(s.turn).toBe('black');
-    s = run(s, place('black', 'pawn', 1, 0));
-    expect(s.turn).toBe('black');
+  it('the second player finishing ends placement for both, even if black has not finished', () => {
+    const s = run(withMarshals(), place('black', 'pawn', 0, 0), finish('white'));
+    expect(s.phase).toBe('play');
+    expect(s.placementDone).toEqual({ black: true, white: true });
+    expect(errorOf(s, place('black', 'pawn', 1, 0))).toBe(MoveError.WRONG_PHASE);
   });
 
-  it('§9.4 both declarations start play with white to move', () => {
-    const s = run(withMarshals(), place('black', 'pawn', 0, 0), finish('white'), finish('black'));
-    expect(s.phase).toBe('play');
-    expect(s.turn).toBe('white');
-    expect(s.placementDone).toEqual({ black: true, white: true });
+  it('§9.4 play starts with the first player (black) to move; unplaced pieces stay in hand', () => {
+    const s = run(withMarshals(), place('black', 'pawn', 0, 0), finish('white'));
+    expect(s.turn).toBe('black');
     expect(s.hands.black.pawn).toBe(3);
     expect(s.hands.white.pawn).toBe(4);
+    expect(handTotal(s.hands.black)).toBe(23);
   });
 
-  it('is never declared automatically', () => {
+  it('black finishing first and white finishing later also starts play with black to move', () => {
+    const s = run(withMarshals(), finish('black'), place('white', 'pawn', 0, 8), finish('white'));
+    expect(s.phase).toBe('play');
+    expect(s.turn).toBe('black');
+  });
+
+  it('is not declared automatically while pieces remain in hand', () => {
     const s = run(withMarshals(), place('black', 'pawn', 0, 0));
     expect(s.placementDone).toEqual({ black: false, white: false });
   });
 
+  it('R-7 placing the last piece in hand finishes the first player', () => {
+    const last = { ...withMarshals(), hands: { ...withMarshals().hands, black: oneLeft('pawn') } };
+    const s = run(last, place('black', 'pawn', 0, 0));
+    expect(s.placementDone).toEqual({ black: true, white: false });
+    expect(s.phase).toBe('placement');
+    expect(s.turn).toBe('white');
+    expect(
+      placementMoves(run(s, place('white', 'pawn', 0, 8))).every((m) => m.player === 'white'),
+    ).toBe(true);
+  });
+
+  it('R-7 placing the last piece in hand as the second player ends placement', () => {
+    const base = run(withMarshals(), place('black', 'pawn', 0, 0));
+    const last = { ...base, hands: { ...base.hands, white: oneLeft('pawn') } };
+    const s = run(last, place('white', 'pawn', 0, 8));
+    expect(s.phase).toBe('play');
+    expect(s.turn).toBe('black');
+  });
+
   it('§11.4 placements and declarations keep the quiet-ply counter at 0', () => {
-    const s = run(withMarshals(), place('black', 'pawn', 0, 0), finish('white'), finish('black'));
+    const s = run(withMarshals(), place('black', 'pawn', 0, 0), finish('white'));
     expect(s.quietPlies).toBe(0);
     expect(run({ ...withMarshals(), quietPlies: 7 }, finish('black')).quietPlies).toBe(0);
+  });
+});
+
+describe('§9.1 first player option', () => {
+  const whiteFirst = () => createInitialState({ firstPlayer: 'white' });
+
+  it('defaults to black and records the first player in the state', () => {
+    expect(createInitialState().firstPlayer).toBe('black');
+    expect(createInitialState({}).turn).toBe('black');
+    expect(whiteFirst()).toMatchObject({ firstPlayer: 'white', turn: 'white' });
+  });
+
+  it('rejects an unknown first player', () => {
+    expect(() => createInitialState({ firstPlayer: 'red' as PlayerSide })).toThrow(RangeError);
+  });
+
+  it('white places its marshal first and the sides alternate from white', () => {
+    expect(errorOf(whiteFirst(), place('black', 'marshal', 4, 0))).toBe(MoveError.NOT_YOUR_TURN);
+    let s = run(whiteFirst(), place('white', 'marshal', 4, 8));
+    expect(s.turn).toBe('black');
+    s = run(s, place('black', 'marshal', 4, 0), place('white', 'pawn', 0, 8));
+    expect(s.turn).toBe('black');
+  });
+
+  it('white (first) finishing lets black keep placing alone', () => {
+    let s = run(whiteFirst(), place('white', 'marshal', 4, 8), place('black', 'marshal', 4, 0));
+    s = run(s, finish('white'));
+    expect(s).toMatchObject({ phase: 'placement', turn: 'black' });
+    s = run(s, place('black', 'pawn', 0, 0), place('black', 'pawn', 1, 0));
+    expect(s.turn).toBe('black');
+    expect(errorOf(s, place('white', 'pawn', 0, 8))).toBe(MoveError.NOT_YOUR_TURN);
+  });
+
+  it('black (second) finishing ends placement and white moves first in play', () => {
+    const s = run(
+      whiteFirst(),
+      place('white', 'marshal', 4, 8),
+      place('black', 'marshal', 4, 0),
+      place('white', 'pawn', 0, 8),
+      finish('black'),
+    );
+    expect(s).toMatchObject({ phase: 'play', turn: 'white' });
+    expect(s.placementDone).toEqual({ black: true, white: true });
   });
 });
 

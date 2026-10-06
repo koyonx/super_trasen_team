@@ -66,6 +66,8 @@ export interface GameState {
   readonly board: Board;
   readonly hands: Readonly<Record<PlayerSide, Hand>>;
   readonly turn: PlayerSide;
+  /** §9.1 the side that places first and moves first in play (先手). */
+  readonly firstPlayer: PlayerSide;
   /** §9.3 whether each side has finished the placement phase. */
   readonly placementDone: Readonly<Record<PlayerSide, boolean>>;
   /** Pieces removed from the game, keyed by the side that removed them. */

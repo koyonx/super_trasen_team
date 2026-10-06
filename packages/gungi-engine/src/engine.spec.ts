@@ -157,17 +157,14 @@ describe('§10.1 self-check under §6.4 whole-stack capture', () => {
 });
 
 describe('§11.1 marshal capture', () => {
-  // Reachable only at the start of play: white's last placements left black
-  // in check (a tier-3 cannon on file 4) and white moves first (§9.4).
-  const opening = (...black: PieceKind[]) =>
-    createPosition({
-      stacks: [
-        at(8, 8, W('marshal')),
-        at(4, 6, W('pawn'), W('general')),
-        at(4, 2, ...black.map(B)),
-      ],
-      turn: 'white',
-    });
+  // Unreachable in a legal game (§10.1): the boards are put together directly
+  // to pin down what the engine does if the side to move can take the marshal.
+  const opening = (...black: PieceKind[]): GameState => {
+    const base = createPosition({ stacks: [at(4, 2, B('marshal')), at(8, 8, W('marshal'))] });
+    const stacks = [at(4, 6, W('pawn'), W('general')), at(4, 2, ...black.map(B))];
+    const board = stacks.reduce((b, { square, pieces }) => setStack(b, square, pieces), base.board);
+    return { ...base, board, turn: 'white' };
+  };
 
   it('ends the game and records the capture', () => {
     const next = play(opening('marshal'), mv('capture', [4, 6], [4, 2], 'white'));
@@ -181,6 +178,10 @@ describe('§11.1 marshal capture', () => {
     const next = play(opening('pawn', 'marshal'), mv('capture', [4, 6], [4, 2], 'white'));
     expect(getStack(next.board, sq(4, 2))).toEqual([W('general')]);
     expect(next.result).toEqual({ winner: 'white', reason: 'marshalCaptured' });
+  });
+
+  it('createPosition and stateError reject such a position', () => {
+    expect(stateError(opening('marshal'))).toBe('OPPONENT_IN_CHECK');
   });
 });
 
@@ -352,6 +353,7 @@ describe('§12.1 state data', () => {
     const s = createPosition({ stacks: [at(0, 0, B('marshal')), at(8, 8, W('marshal'))] });
     expect(s.phase).toBe('play');
     expect(s.turn).toBe('black');
+    expect(s.firstPlayer).toBe('black');
     expect(s.quietPlies).toBe(0);
     expect(JSON.parse(JSON.stringify(s))).toEqual(s);
   });
@@ -503,18 +505,29 @@ describe('§12.2 malformed input', () => {
 });
 
 describe('§9 → §11 lifecycle', () => {
-  it('placement transitions to play with white to move', () => {
+  it('placement transitions to play with the first player to move', () => {
     const s = play(
       createInitialState(),
       { type: 'place', player: 'black', kind: 'marshal', to: sq(4, 0) },
       { type: 'place', player: 'white', kind: 'marshal', to: sq(4, 8) },
       { type: 'place', player: 'black', kind: 'pawn', to: sq(4, 2) },
       { type: 'finishPlacement', player: 'white' },
-      { type: 'finishPlacement', player: 'black' },
     );
     expect(s.phase).toBe('play');
-    expect(s.turn).toBe('white');
+    expect(s.turn).toBe('black');
     expect(legalMoves(s).length).toBeGreaterThan(0);
+    expect(legalMoves(s).every((m) => 'player' in m && m.player === 'black')).toBe(true);
+  });
+
+  it('a white-first game starts play with white to move', () => {
+    const s = play(
+      createInitialState({ firstPlayer: 'white' }),
+      { type: 'place', player: 'white', kind: 'marshal', to: sq(4, 8) },
+      { type: 'place', player: 'black', kind: 'marshal', to: sq(4, 0) },
+      { type: 'finishPlacement', player: 'white' },
+      { type: 'finishPlacement', player: 'black' },
+    );
+    expect(s).toMatchObject({ phase: 'play', turn: 'white', firstPlayer: 'white' });
     expect(legalMoves(s).every((m) => 'player' in m && m.player === 'white')).toBe(true);
   });
 });
@@ -567,20 +580,81 @@ describe('§9.5 check during placement', () => {
     expect(s.phase).toBe('finished');
   });
 
-  it('§11.1 a check carried into play lets white capture the marshal', () => {
+  it('a first player that has finished cannot answer checks given by later placements', () => {
     const s = play(
       createInitialState(),
       place('black', 'marshal', 4, 0),
       place('white', 'marshal', 0, 8),
       { type: 'finishPlacement', player: 'black' },
       place('white', 'general', 4, 6),
-      { type: 'finishPlacement', player: 'white' },
     );
-    expect(s.phase).toBe('play');
-    expect(s.turn).toBe('white');
-    const next = play(s, mv('capture', [4, 6], [4, 0], 'white'));
-    expect(next.result).toEqual({ winner: 'white', reason: 'marshalCaptured' });
-    expect(next.captured.white).toEqual(['marshal']);
+    expect(s).toMatchObject({ phase: 'placement', turn: 'white' });
+    expect(inCheck({ ...s, turn: 'black' })).toBe(true);
+    expect(stateError(JSON.parse(JSON.stringify(s)))).toBeNull();
+    // Play starts with black to move, in check; here it can still step aside.
+    const started = play(s, { type: 'finishPlacement', player: 'white' });
+    expect(started).toMatchObject({ phase: 'play', turn: 'black', result: null });
+    expect(inCheck(started)).toBe(true);
+    expect(legalMoves(started)).toContainEqual(mv('move', [4, 0], [3, 0]));
+  });
+});
+
+/**
+ * §9.6 即死筋: a first player that finishes placing early lets the second
+ * player keep placing and build a mating net, so play starts with the first
+ * player already mated. This is intended (official play), not a defect.
+ */
+describe('§9.6 sudden death after an early finish (即死筋)', () => {
+  it('black finishes with only its marshal; white builds a battery and mates at the start of play', () => {
+    const s = play(
+      createInitialState(),
+      place('black', 'marshal', 0, 0),
+      place('white', 'marshal', 8, 8),
+      { type: 'finishPlacement', player: 'black' },
+      place('white', 'pawn', 1, 6),
+      place('white', 'pawn', 1, 6),
+      place('white', 'cannon', 1, 6),
+      place('white', 'lieutenant', 7, 6),
+      place('white', 'general', 0, 6),
+    );
+    expect(s.phase).toBe('placement');
+    expect(inCheck({ ...s, turn: 'black' })).toBe(true);
+    const mated = play(s, { type: 'finishPlacement', player: 'white' });
+    expect(mated.phase).toBe('finished');
+    expect(mated.turn).toBe('black');
+    expect(mated.result).toEqual({ winner: 'white', reason: 'checkmate' });
+    // Black still holds 24 pieces, but the front line keeps drops on rank 0 (§8.2).
+    expect(handTotal(mated.hands.black)).toBe(24);
+  });
+
+  it('the same line works against a white first player', () => {
+    const s = play(
+      createInitialState({ firstPlayer: 'white' }),
+      place('white', 'marshal', 8, 8),
+      place('black', 'marshal', 0, 0),
+      { type: 'finishPlacement', player: 'white' },
+      place('black', 'pawn', 7, 2),
+      place('black', 'pawn', 7, 2),
+      place('black', 'cannon', 7, 2),
+      place('black', 'lieutenant', 1, 2),
+      place('black', 'general', 8, 2),
+      { type: 'finishPlacement', player: 'black' },
+    );
+    expect(s).toMatchObject({ phase: 'finished', turn: 'white' });
+    expect(s.result).toEqual({ winner: 'black', reason: 'checkmate' });
+  });
+
+  it('a first player that keeps placing can block the check instead', () => {
+    const s = play(
+      createInitialState(),
+      place('black', 'marshal', 0, 0),
+      place('white', 'marshal', 8, 8),
+      place('black', 'pawn', 0, 1),
+      place('white', 'general', 0, 6),
+    );
+    // The pawn already blocks the general's file, so black is not in check.
+    expect(inCheck(s)).toBe(false);
+    expect(validateMove(s, { type: 'finishPlacement', player: 'black' })).toBeNull();
   });
 });
 
@@ -612,13 +686,13 @@ function checkInvariants(state: GameState): void {
   expect(state.quietPlies).toBeLessThanOrEqual(QUIET_PLY_LIMIT + 1);
   if (state.phase !== 'finished') {
     expect(state.quietPlies).toBeLessThanOrEqual(QUIET_PLY_LIMIT);
-    // §10.1 the side that just moved is never left in check, except a side that
-    // has finished placing (§9.5) and at the start of play (§11.1).
-    const waiting = state.phase === 'placement' && state.placementDone[opponent(state.turn)];
-    const noCaptures = state.captured.black.length + state.captured.white.length === 0;
-    const playStart = state.phase === 'play' && state.quietPlies === 0 && noCaptures;
-    if (!waiting && !playStart)
-      expect(inCheck({ ...state, turn: opponent(state.turn) })).toBe(false);
+    // §10.1 the side that just moved is never left in check, except a first
+    // player that has finished placing (§9.5). There is no exception in play.
+    const waiting =
+      state.phase === 'placement' &&
+      state.placementDone[state.firstPlayer] &&
+      state.turn !== state.firstPlayer;
+    if (!waiting) expect(inCheck({ ...state, turn: opponent(state.turn) })).toBe(false);
   }
 }
 
@@ -627,7 +701,8 @@ describe('random self-play invariants', () => {
     'seed %i: every legal move applies and invariants hold',
     (seed) => {
       const rand = rng(seed);
-      let state = createInitialState();
+      // Odd seeds play black first, even seeds white first (§9.1).
+      let state = createInitialState({ firstPlayer: seed % 2 === 1 ? 'black' : 'white' });
       for (let i = 0; i < 400 && !isGameOver(state); i++) {
         const moves = legalMoves(state);
         expect(moves.length).toBeGreaterThan(0);
