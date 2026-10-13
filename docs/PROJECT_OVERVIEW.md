@@ -212,7 +212,7 @@ TS 統一の利点: 型・バリデーション・ゲームエンジンの単一
 | レイヤ | 方針 |
 |---|---|
 | スタイリング | CSS フレームワーク必須要件。Tailwind CSS を第一候補（言語決定に依存しない） |
-| リアルタイム | WebSocket（GraphQL Subscriptions または Socket.IO 系。BE言語決定後に確定） |
+| リアルタイム | **Socket.IO**（確定。namespace `/match`、契約は `packages/shared/src/ws.ts`。詳細は [WEBSOCKET.md](./WEBSOCKET.md)） |
 | 認証 | email+password（argon2/bcrypt ハッシュ+ソルト）+ OAuth 2.0 + JWT (httpOnly cookie) |
 | バリデーション | FE/BE 両側必須。スキーマ定義（GraphQL スキーマ + 入力バリデータ）を単一ソース化 |
 | アバター保存 | server コンテナのボリュームに保存（チャットメディア・棋譜ファイルがなくなったため MinIO は不採用） |
@@ -265,6 +265,8 @@ TS 統一の利点: 型・バリデーション・ゲームエンジンの単一
                         │ └─────────────┘                                  │
                        └─────────────────────────────────────────────────┘
 ```
+
+リアルタイム対局（Socket.IO `/match`）の実装詳細・イベント契約は [WEBSOCKET.md](./WEBSOCKET.md) を参照。
 
 ### 主要ドメインサービス（server 内のモジュール分割）
 

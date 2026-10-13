@@ -1,0 +1,542 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { legalMoves } from '@gungi/engine';
+import type { GameState } from '@gungi/engine';
+import { clientMoveSchema, rejoinTokenSchema } from '@gungi/shared';
+import type { ClientMove, WsErrorCode } from '@gungi/shared';
+import { InMemoryMatchRepository } from './match.repository';
+import { MatchService } from './match.service';
+import { MatchError } from './match.types';
+import type { PlayerIdentity } from './match.types';
+
+const alice: PlayerIdentity = { kind: 'guest', playerId: 'guest_alice', displayName: 'Alice' };
+const bob: PlayerIdentity = { kind: 'guest', playerId: 'guest_bob', displayName: null };
+const carol: PlayerIdentity = { kind: 'guest', playerId: 'guest_carol', displayName: 'Carol' };
+const dave: PlayerIdentity = { kind: 'user', playerId: 'user_dave', displayName: 'Dave' };
+const erin: PlayerIdentity = { kind: 'user', playerId: 'user_erin', displayName: 'Erin' };
+
+const MISSING_ID = '00000000-0000-4000-8000-000000000000';
+const marshal = (file: number, rank: number): ClientMove => ({
+  type: 'place',
+  kind: 'marshal',
+  to: { file, rank },
+});
+
+async function expectCode(promise: Promise<unknown>, code: WsErrorCode): Promise<void> {
+  const error = await promise.then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect(error).toBeInstanceOf(MatchError);
+  expect((error as MatchError).code).toBe(code);
+}
+
+describe('MatchService', () => {
+  let repository: InMemoryMatchRepository;
+  let service: MatchService;
+
+  beforeEach(() => {
+    repository = new InMemoryMatchRepository();
+    service = new MatchService(repository);
+  });
+
+  /** Alice (black, first) vs Bob (white), active. */
+  async function activeMatch() {
+    const created = await service.create(alice, 'c-alice', { side: 'black', firstPlayer: 'black' });
+    const joined = await service.join(created.match.matchId, bob, 'c-bob');
+    return { id: created.match.matchId, created, joined };
+  }
+
+  describe('create', () => {
+    it('opens a waiting match with the creator on the chosen side', async () => {
+      const { match, you } = await service.create(alice, 'c-alice', {
+        side: 'white',
+        firstPlayer: 'black',
+      });
+
+      expect(match.status).toBe('waiting');
+      expect(match.state).toBeNull();
+      expect(match.firstPlayer).toBe('black');
+      expect(match.seats.black).toBeNull();
+      expect(match.seats.white).toEqual({
+        playerId: 'guest_alice',
+        displayName: 'Alice',
+        connected: true,
+      });
+      expect(you.side).toBe('white');
+      expect(rejoinTokenSchema.safeParse(you.rejoinToken).success).toBe(true);
+      expect(JSON.stringify(match)).not.toContain(you.rejoinToken);
+    });
+
+    it('resolves random choices to a side', async () => {
+      for (let i = 0; i < 10; i++) {
+        const { match, you } = await service.create(alice, `c${i}`, {
+          side: 'random',
+          firstPlayer: 'random',
+        });
+        expect(['black', 'white']).toContain(you.side);
+        expect(['black', 'white']).toContain(match.firstPlayer);
+      }
+    });
+  });
+
+  describe('join', () => {
+    it('seats the second player and starts the engine', async () => {
+      const { joined, created } = await activeMatch();
+
+      expect(joined.you.side).toBe('white');
+      expect(joined.you.rejoinToken).not.toBe(created.you.rejoinToken);
+      expect(joined.match.status).toBe('active');
+      expect(joined.match.revision).toBe(created.match.revision + 1);
+      expect(joined.match.state?.phase).toBe('placement');
+      expect(joined.match.state?.turn).toBe('black');
+      expect(joined.match.seats.white?.playerId).toBe('guest_bob');
+    });
+
+    it('honours a white first player', async () => {
+      const created = await service.create(alice, 'c-alice', {
+        side: 'black',
+        firstPlayer: 'white',
+      });
+      const joined = await service.join(created.match.matchId, bob, 'c-bob');
+      expect(joined.match.state?.firstPlayer).toBe('white');
+      expect(joined.match.state?.turn).toBe('white');
+    });
+
+    it('rejects the seat holder, a third player and unknown matches', async () => {
+      const created = await service.create(alice, 'c-alice', {
+        side: 'black',
+        firstPlayer: 'black',
+      });
+      const id = created.match.matchId;
+
+      await expectCode(service.join(id, alice, 'c-alice'), 'ALREADY_SEATED');
+      await expectCode(service.join(id, alice, 'c-other'), 'ALREADY_SEATED');
+      await service.join(id, bob, 'c-bob');
+      await expectCode(service.join(id, carol, 'c-carol'), 'MATCH_FULL');
+      await expectCode(service.join(MISSING_ID, carol, 'c-carol'), 'MATCH_NOT_FOUND');
+    });
+
+    it('rejects joining a finished match as not active', async () => {
+      const { id } = await activeMatch();
+      await service.applyMove(id, 'c-alice', { type: 'resign' });
+      await expectCode(service.join(id, carol, 'c-carol'), 'MATCH_NOT_ACTIVE');
+      await expectCode(service.join(id, alice, 'c-alice'), 'ALREADY_SEATED');
+    });
+
+    it('lets exactly one of two concurrent joiners take the seat', async () => {
+      const created = await service.create(alice, 'c-alice', {
+        side: 'black',
+        firstPlayer: 'black',
+      });
+      const results = await Promise.allSettled([
+        service.join(created.match.matchId, bob, 'c-bob'),
+        service.join(created.match.matchId, carol, 'c-carol'),
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    });
+  });
+
+  describe('applyMove', () => {
+    it('applies a legal move and records it with the seat side', async () => {
+      const { id, joined } = await activeMatch();
+      const view = await service.applyMove(id, 'c-alice', marshal(4, 0), 0);
+
+      expect(view.revision).toBe(joined.match.revision + 1);
+      expect(view.state?.ply).toBe(1);
+      expect(view.state?.turn).toBe('white');
+      expect(view.lastMove).toEqual({
+        type: 'place',
+        kind: 'marshal',
+        to: { file: 4, rank: 0 },
+        player: 'black',
+      });
+    });
+
+    it('forwards engine rule violations unchanged', async () => {
+      const { id } = await activeMatch();
+      await expectCode(service.applyMove(id, 'c-bob', marshal(4, 8)), 'NOT_YOUR_TURN');
+      await expectCode(
+        service.applyMove(id, 'c-alice', { type: 'place', kind: 'pawn', to: { file: 0, rank: 0 } }),
+        'MARSHAL_FIRST',
+      );
+      await expectCode(service.applyMove(id, 'c-alice', marshal(99, 0)), 'INVALID_SQUARE');
+      const view = await service.get(id);
+      expect(view?.state?.ply).toBe(0);
+    });
+
+    it('rejects moves outside an active seat', async () => {
+      const created = await service.create(alice, 'c-alice', {
+        side: 'black',
+        firstPlayer: 'black',
+      });
+      const id = created.match.matchId;
+      await expectCode(service.applyMove(id, 'c-alice', marshal(4, 0)), 'MATCH_NOT_ACTIVE');
+      await service.join(id, bob, 'c-bob');
+      await expectCode(service.applyMove(id, 'c-carol', marshal(4, 0)), 'NOT_SEATED');
+      await expectCode(
+        service.applyMove(id, 'c-alice', { ...marshal(4, 0), player: 'white' }),
+        'NOT_YOUR_SIDE',
+      );
+      await expectCode(service.applyMove(MISSING_ID, 'c-alice', marshal(4, 0)), 'MATCH_NOT_FOUND');
+    });
+
+    it('rejects a stale ply guard', async () => {
+      const { id } = await activeMatch();
+      await service.applyMove(id, 'c-alice', marshal(4, 0), 0);
+      await expectCode(service.applyMove(id, 'c-bob', marshal(4, 8), 0), 'STALE_PLY');
+      await expect(service.applyMove(id, 'c-bob', marshal(4, 8), 1)).resolves.toBeDefined();
+    });
+  });
+
+  describe('per-match lock', () => {
+    it('applies a duplicated move exactly once', async () => {
+      const { id } = await activeMatch();
+      const results = await Promise.allSettled([
+        service.applyMove(id, 'c-alice', marshal(4, 0), 0),
+        service.applyMove(id, 'c-alice', marshal(4, 0), 0),
+        service.applyMove(id, 'c-alice', marshal(4, 0), 0),
+      ]);
+
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const view = await service.get(id);
+      expect(view?.state?.ply).toBe(1);
+    });
+
+    it('keeps state and revision consistent under concurrent moves of both players', async () => {
+      const { id, joined } = await activeMatch();
+      await service.applyMove(id, 'c-alice', marshal(4, 0));
+      await service.applyMove(id, 'c-bob', marshal(4, 8));
+
+      const pawn = (file: number, rank: number): ClientMove => ({
+        type: 'place',
+        kind: 'pawn',
+        to: { file, rank },
+      });
+      const attempts = [0, 1, 2, 3, 5, 6, 7, 8].flatMap((file) => [
+        service.applyMove(id, 'c-alice', pawn(file, 2)),
+        service.applyMove(id, 'c-bob', pawn(file, 6)),
+      ]);
+      const results = await Promise.allSettled(attempts);
+      const applied = results.filter((r) => r.status === 'fulfilled').length;
+
+      const view = await service.get(id);
+      expect(applied).toBeGreaterThan(0);
+      expect(view?.state?.ply).toBe(2 + applied);
+      expect(view?.revision).toBe(joined.match.revision + 2 + applied);
+    });
+  });
+
+  describe('disconnect and rejoin', () => {
+    it('holds the seat of a disconnected player', async () => {
+      const { id } = await activeMatch();
+      const detached = await service.disconnect(id, 'c-bob');
+
+      expect(detached.side).toBe('white');
+      expect(detached.match?.status).toBe('active');
+      expect(detached.match?.seats.white?.connected).toBe(false);
+      await expectCode(service.join(id, carol, 'c-carol'), 'MATCH_FULL');
+    });
+
+    it('rebinds the seat with a valid token only', async () => {
+      const { id, joined } = await activeMatch();
+      await service.applyMove(id, 'c-alice', marshal(4, 0));
+      await service.disconnect(id, 'c-bob');
+
+      await expectCode(service.rejoin(id, 'x'.repeat(43), carol, 'c-x'), 'INVALID_REJOIN_TOKEN');
+      await expectCode(service.applyMove(id, 'c-bob', marshal(4, 8)), 'NOT_SEATED');
+
+      const bob2: PlayerIdentity = { kind: 'guest', playerId: 'guest_bob2', displayName: null };
+      const back = await service.rejoin(id, joined.you.rejoinToken, bob2, 'c-bob2');
+      expect(back.replacedConnectionId).toBeNull();
+      expect(back.you).toEqual({ ...joined.you, playerId: 'guest_bob2' });
+      expect(back.match.seats.white?.connected).toBe(true);
+      expect(back.match.state?.ply).toBe(1);
+
+      await expect(service.applyMove(id, 'c-bob2', marshal(4, 8))).resolves.toBeDefined();
+    });
+
+    it('rebinds a user seat only to the same user, even with a valid token', async () => {
+      const created = await service.create(dave, 'c-dave', { side: 'black', firstPlayer: 'black' });
+      const id = created.match.matchId;
+      await service.join(id, bob, 'c-bob');
+      await service.disconnect(id, 'c-dave');
+      const token = created.you.rejoinToken;
+
+      await expectCode(service.rejoin(id, token, erin, 'c-erin'), 'INVALID_REJOIN_TOKEN');
+      await expectCode(service.rejoin(id, token, carol, 'c-carol'), 'INVALID_REJOIN_TOKEN');
+      expect((await service.get(id))?.seats.black).toEqual({
+        playerId: 'user_dave',
+        displayName: 'Dave',
+        connected: false,
+      });
+
+      const back = await service.rejoin(id, token, dave, 'c-dave2');
+      expect(back.you.playerId).toBe('user_dave');
+      await expect(service.applyMove(id, 'c-dave2', marshal(4, 0))).resolves.toBeDefined();
+    });
+
+    it('rebinds a guest seat to an authenticated user presenting its token', async () => {
+      const { id, joined } = await activeMatch();
+      const back = await service.rejoin(id, joined.you.rejoinToken, dave, 'c-dave');
+      expect(back.you.playerId).toBe('user_dave');
+      await service.disconnect(id, 'c-dave');
+      await expectCode(
+        service.rejoin(id, joined.you.rejoinToken, erin, 'c-erin'),
+        'INVALID_REJOIN_TOKEN',
+      );
+    });
+
+    it('reports a connection replaced by a rejoin', async () => {
+      const { id, created } = await activeMatch();
+      const back = await service.rejoin(id, created.you.rejoinToken, alice, 'c-alice2');
+
+      expect(back.replacedConnectionId).toBe('c-alice');
+      await expectCode(service.applyMove(id, 'c-alice', marshal(4, 0)), 'NOT_SEATED');
+      await expect(service.applyMove(id, 'c-alice2', marshal(4, 0))).resolves.toBeDefined();
+    });
+
+    it('rejects a seated connection rejoining the other seat', async () => {
+      const { id, joined } = await activeMatch();
+      await service.disconnect(id, 'c-bob');
+
+      await expectCode(
+        service.rejoin(id, joined.you.rejoinToken, alice, 'c-alice'),
+        'ALREADY_SEATED',
+      );
+      const view = await service.get(id);
+      expect(view?.seats.black).toMatchObject({ playerId: 'guest_alice', connected: true });
+      expect(view?.seats.white).toMatchObject({ playerId: 'guest_bob', connected: false });
+
+      // No ghost connected seat: once alice is gone the finished match is discarded.
+      await service.applyMove(id, 'c-alice', { type: 'resign' });
+      const last = await service.disconnect(id, 'c-alice');
+      expect(last.match).toBeNull();
+      expect(repository.size).toBe(0);
+    });
+
+    it('rejects a user holding one seat rejoining the other from another connection', async () => {
+      const created = await service.create(dave, 'c-dave', { side: 'black', firstPlayer: 'black' });
+      const id = created.match.matchId;
+      const joined = await service.join(id, bob, 'c-bob');
+      await service.disconnect(id, 'c-bob');
+
+      await expectCode(
+        service.rejoin(id, joined.you.rejoinToken, dave, 'c-dave2'),
+        'ALREADY_SEATED',
+      );
+      await service.disconnect(id, 'c-dave');
+      await expectCode(
+        service.rejoin(id, joined.you.rejoinToken, dave, 'c-dave3'),
+        'ALREADY_SEATED',
+      );
+      expect((await service.get(id))?.seats.white?.playerId).toBe('guest_bob');
+
+      // Its own seat and a stranger's rejoin still work.
+      await expect(
+        service.rejoin(id, created.you.rejoinToken, dave, 'c-dave3'),
+      ).resolves.toMatchObject({ you: { side: 'black' } });
+      await expect(
+        service.rejoin(id, joined.you.rejoinToken, bob, 'c-bob2'),
+      ).resolves.toMatchObject({
+        you: { side: 'white' },
+      });
+    });
+
+    it('lets a connection rejoin the seat it already holds', async () => {
+      const { id, created } = await activeMatch();
+      const again = await service.rejoin(id, created.you.rejoinToken, alice, 'c-alice');
+      expect(again.you.side).toBe('black');
+      expect(again.replacedConnectionId).toBeNull();
+    });
+
+    it('rejects detaching a connection without a seat', async () => {
+      const { id } = await activeMatch();
+      await expectCode(service.disconnect(id, 'c-carol'), 'NOT_SEATED');
+      await expectCode(service.leave(MISSING_ID, 'c-alice'), 'MATCH_NOT_FOUND');
+    });
+  });
+
+  describe('match limits', () => {
+    it('rejects creation at the cap and accepts it again once a match is freed', async () => {
+      const limited = new MatchService(new InMemoryMatchRepository({ total: 10, waiting: 1 }));
+      const options = { side: 'black', firstPlayer: 'black' } as const;
+      const first = await limited.create(alice, 'c-alice', options);
+      await expectCode(limited.create(bob, 'c-bob', options), 'MATCH_LIMIT');
+
+      await limited.leave(first.match.matchId, 'c-alice');
+      const second = await limited.create(bob, 'c-bob', options);
+      await expectCode(limited.create(carol, 'c-carol', options), 'MATCH_LIMIT');
+
+      await limited.join(second.match.matchId, carol, 'c-carol');
+      await expect(limited.create(alice, 'c-alice', options)).resolves.toBeDefined();
+    });
+
+    describe('eviction of unattended matches', () => {
+      const options = { side: 'black', firstPlayer: 'black' } as const;
+      let clock = Date.UTC(2026, 0, 1);
+
+      // Every service call gets a later `updatedAt`, so "oldest" is well defined.
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+      const tick = () => vi.setSystemTime((clock += 1000));
+
+      async function createAndDisconnect(svc: MatchService, n: number) {
+        tick();
+        const created = await svc.create(alice, `c-${n}`, options);
+        tick();
+        await svc.disconnect(created.match.matchId, `c-${n}`);
+        return created;
+      }
+
+      it('frees the waiting cap filled by creators that disconnected', async () => {
+        const store = new InMemoryMatchRepository({ total: 100, waiting: 3 });
+        const limited = new MatchService(store);
+        const abandoned = [];
+        for (let n = 0; n < 3; n++) abandoned.push(await createAndDisconnect(limited, n));
+
+        tick();
+        const victim = await limited.create(bob, 'c-bob', options);
+        expect(victim.match.status).toBe('waiting');
+        expect(store.size).toBe(3);
+        expect(await limited.get(abandoned[0]!.match.matchId)).toBeNull();
+        expect(await limited.get(abandoned[1]!.match.matchId)).not.toBeNull();
+
+        await expectCode(
+          limited.rejoin(abandoned[0]!.match.matchId, abandoned[0]!.you.rejoinToken, alice, 'c-a'),
+          'MATCH_NOT_FOUND',
+        );
+        const back = await limited.rejoin(
+          abandoned[1]!.match.matchId,
+          abandoned[1]!.you.rejoinToken,
+          alice,
+          'c-a',
+        );
+        expect(back.match.seats.black?.connected).toBe(true);
+      });
+
+      it('keeps waiting matches whose creator is connected', async () => {
+        const limited = new MatchService(new InMemoryMatchRepository({ total: 100, waiting: 2 }));
+        await limited.create(alice, 'c-1', options);
+        await limited.create(alice, 'c-2', options);
+        await expectCode(limited.create(bob, 'c-bob', options), 'MATCH_LIMIT');
+      });
+
+      it('frees the total cap filled by fully disconnected active matches', async () => {
+        const store = new InMemoryMatchRepository({ total: 2, waiting: 2 });
+        const limited = new MatchService(store);
+        const games = [];
+        for (let n = 0; n < 2; n++) {
+          tick();
+          const created = await limited.create(alice, `c-a${n}`, options);
+          await limited.join(created.match.matchId, bob, `c-b${n}`);
+          await limited.disconnect(created.match.matchId, `c-a${n}`);
+          await limited.disconnect(created.match.matchId, `c-b${n}`);
+          games.push(created);
+        }
+        expect((await limited.get(games[0]!.match.matchId))?.status).toBe('active');
+
+        tick();
+        await expect(limited.create(carol, 'c-carol', options)).resolves.toBeDefined();
+        expect(store.size).toBe(2);
+        await expectCode(
+          limited.rejoin(games[0]!.match.matchId, games[0]!.you.rejoinToken, alice, 'c-a'),
+          'MATCH_NOT_FOUND',
+        );
+        expect(await limited.get(games[1]!.match.matchId)).not.toBeNull();
+      });
+
+      it('never evicts an active match with one connected seat', async () => {
+        const limited = new MatchService(new InMemoryMatchRepository({ total: 1, waiting: 1 }));
+        const created = await limited.create(alice, 'c-alice', options);
+        await limited.join(created.match.matchId, bob, 'c-bob');
+        await limited.disconnect(created.match.matchId, 'c-alice');
+
+        await expectCode(limited.create(carol, 'c-carol', options), 'MATCH_LIMIT');
+        expect((await limited.get(created.match.matchId))?.status).toBe('active');
+      });
+    });
+  });
+
+  describe('leave and cleanup', () => {
+    it('discards a waiting match left by its creator', async () => {
+      const created = await service.create(alice, 'c-alice', {
+        side: 'black',
+        firstPlayer: 'black',
+      });
+      const left = await service.leave(created.match.matchId, 'c-alice');
+      expect(left.match).toBeNull();
+      expect(repository.size).toBe(0);
+    });
+
+    it('keeps a waiting match when its creator only disconnects', async () => {
+      const created = await service.create(alice, 'c-alice', {
+        side: 'black',
+        firstPlayer: 'black',
+      });
+      await service.disconnect(created.match.matchId, 'c-alice');
+      expect(repository.size).toBe(1);
+    });
+
+    it('keeps the seat of a player leaving an active match', async () => {
+      const { id } = await activeMatch();
+      const left = await service.leave(id, 'c-alice');
+      expect(left.match?.status).toBe('active');
+      expect(left.match?.seats.black?.connected).toBe(false);
+    });
+
+    it('discards a finished match once nobody is connected', async () => {
+      const { id } = await activeMatch();
+      await service.applyMove(id, 'c-alice', { type: 'resign' });
+      await service.leave(id, 'c-alice');
+      expect(repository.size).toBe(1);
+      const last = await service.disconnect(id, 'c-bob');
+      expect(last.match).toBeNull();
+      expect(repository.size).toBe(0);
+    });
+  });
+
+  describe('game end', () => {
+    it('plays engine moves through placement and finishes on resignation', async () => {
+      const { id } = await activeMatch();
+      const connection = { black: 'c-alice', white: 'c-bob' } as const;
+      let state = (await service.get(id))?.state as GameState;
+
+      for (let i = 0; i < 60 && state.phase !== 'finished'; i++) {
+        const [move] = legalMoves(state);
+        if (!move) break;
+        const clientMove = clientMoveSchema.parse(move);
+        const view = await service.applyMove(id, connection[state.turn], clientMove, state.ply);
+        state = view.state as GameState;
+      }
+      expect(state.ply).toBeGreaterThan(40);
+
+      const view = await service.applyMove(id, 'c-bob', { type: 'resign' });
+      expect(view.status).toBe('finished');
+      expect(view.state?.result).toEqual({ winner: 'black', reason: 'resignation' });
+      expect(view.lastMove).toEqual({ type: 'resign', player: 'white' });
+      await expectCode(service.applyMove(id, 'c-alice', marshal(0, 0)), 'MATCH_NOT_ACTIVE');
+    });
+
+    it('resigns during placement regardless of the turn', async () => {
+      const { id } = await activeMatch();
+      const view = await service.applyMove(id, 'c-bob', { type: 'resign' });
+      expect(view.state?.result).toEqual({ winner: 'black', reason: 'resignation' });
+    });
+
+    it('plumbs server-decided timeout and agreed draw', async () => {
+      const first = await activeMatch();
+      const timedOut = await service.finishByServer(first.id, { type: 'timeout', player: 'black' });
+      expect(timedOut.state?.result).toEqual({ winner: 'white', reason: 'timeout' });
+      await expectCode(service.finishByServer(first.id, { type: 'agreeDraw' }), 'MATCH_NOT_ACTIVE');
+
+      const second = await activeMatch();
+      const drawn = await service.finishByServer(second.id, { type: 'agreeDraw' });
+      expect(drawn.status).toBe('finished');
+      expect(drawn.state?.result).toEqual({ winner: null, reason: 'agreement' });
+    });
+  });
+});
