@@ -86,6 +86,7 @@ export class MatchService {
       if (seatOf(match, connectionId) || holdsSeat(match, identity.playerId)) {
         throw new MatchError(MatchErrorCode.ALREADY_SEATED);
       }
+      if (match.status === 'finished') throw new MatchError(MatchErrorCode.MATCH_NOT_ACTIVE);
       if (match.status !== 'waiting') throw new MatchError(MatchErrorCode.MATCH_FULL);
       const side = SIDES.find((s) => match.seats[s] === null);
       if (!side) throw new MatchError(MatchErrorCode.MATCH_FULL);

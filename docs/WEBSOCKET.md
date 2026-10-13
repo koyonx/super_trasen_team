@@ -256,8 +256,8 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
 | `FORBIDDEN_ORIGIN` | ハンドシェイクの `Origin` ヘッダーが存在し、許可オリジンでない |
 | `UNAUTHENTICATED` | 認証アダプタが `null` を返した（`GuestAuthAdapter` は返さない） |
 | `MATCH_NOT_FOUND` | join / rejoin / move / leave の対象対局が存在しない（削除済みを含む） |
-| `MATCH_FULL` | join したが対局が `waiting` でない（`active` / `finished`）、または空席がない。観戦はない |
-| `MATCH_NOT_ACTIVE` | move したが対局が `active` でない（`waiting` または `finished`） |
+| `MATCH_FULL` | join したが対局が `active`（両席とも埋まっている）。観戦はない |
+| `MATCH_NOT_ACTIVE` | move したが対局が `active` でない（`waiting` または `finished`）。join したが対局が `finished` |
 | `ALREADY_SEATED` | join した接続がすでにその対局の席に結び付いている、または同じ `playerId` がすでに席を持っている |
 | `ALREADY_IN_MATCH` | create / join / rejoin した接続が、**別の未終了の** 対局に参加中 |
 | `NOT_SEATED` | move / leave した接続がその対局の席に結び付いていない（leave 後や `SEAT_TAKEN_OVER` 後を含む） |
@@ -268,6 +268,8 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
 | `INTERNAL_ERROR` | 予期しない例外。詳細はサーバーログにだけ出る |
 
 `match:move` の検査順: スキーマ → `MATCH_NOT_FOUND` → `NOT_SEATED` → `NOT_YOUR_SIDE` → `MATCH_NOT_ACTIVE` → `STALE_PLY` → エンジン。
+
+`match:join` の検査順: スキーマ → `ALREADY_IN_MATCH`（§5.6）→ `MATCH_NOT_FOUND` → `ALREADY_SEATED` → `MATCH_NOT_ACTIVE`（`finished`）→ `MATCH_FULL`（`active`）。
 
 ### 4.2 ルール違反（エンジンの `MoveError`、22 種）
 

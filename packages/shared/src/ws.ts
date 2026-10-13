@@ -78,9 +78,9 @@ export const MatchErrorCode = {
   /** Handshake: the auth adapter rejected the connection. */
   UNAUTHENTICATED: 'UNAUTHENTICATED',
   MATCH_NOT_FOUND: 'MATCH_NOT_FOUND',
-  /** Both seats are taken (spectating is not supported). */
+  /** Both seats of an active match are taken (spectating is not supported). */
   MATCH_FULL: 'MATCH_FULL',
-  /** The match is waiting for an opponent or already finished. */
+  /** The match is waiting for an opponent (move) or already finished (move, join). */
   MATCH_NOT_ACTIVE: 'MATCH_NOT_ACTIVE',
   /** The requester already holds a seat in this match. */
   ALREADY_SEATED: 'ALREADY_SEATED',

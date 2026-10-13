@@ -114,6 +114,13 @@ describe('MatchService', () => {
       await expectCode(service.join(MISSING_ID, carol, 'c-carol'), 'MATCH_NOT_FOUND');
     });
 
+    it('rejects joining a finished match as not active', async () => {
+      const { id } = await activeMatch();
+      await service.applyMove(id, 'c-alice', { type: 'resign' });
+      await expectCode(service.join(id, carol, 'c-carol'), 'MATCH_NOT_ACTIVE');
+      await expectCode(service.join(id, alice, 'c-alice'), 'ALREADY_SEATED');
+    });
+
     it('lets exactly one of two concurrent joiners take the seat', async () => {
       const created = await service.create(alice, 'c-alice', {
         side: 'black',

@@ -341,6 +341,10 @@ describe('MatchGateway (socket.io e2e)', () => {
       ok: false,
       code: 'MATCH_NOT_ACTIVE',
     });
+    expect(await request(intruder, ClientEvent.JOIN, { matchId })).toEqual({
+      ok: false,
+      code: 'MATCH_NOT_ACTIVE',
+    });
   });
 
   it('evicts the previous connection when a seat is rejoined elsewhere', async () => {
