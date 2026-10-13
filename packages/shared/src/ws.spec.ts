@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ClientEvent,
+  MatchErrorCode,
   ServerEvent,
   WS_PROTOCOL_VERSION,
   clientEventSchemas,
@@ -29,6 +30,32 @@ describe('ws event names', () => {
 
   it('builds room names from match ids', () => {
     expect(matchRoom(MATCH_ID)).toBe(`match:${MATCH_ID}`);
+  });
+});
+
+describe('protocol error codes', () => {
+  it('lists exactly the documented codes, each named after itself', () => {
+    expect(Object.keys(MatchErrorCode).sort()).toEqual(
+      [
+        'INVALID_PAYLOAD',
+        'UNSUPPORTED_PROTOCOL',
+        'FORBIDDEN_ORIGIN',
+        'UNAUTHENTICATED',
+        'MATCH_NOT_FOUND',
+        'MATCH_FULL',
+        'MATCH_NOT_ACTIVE',
+        'ALREADY_SEATED',
+        'ALREADY_IN_MATCH',
+        'NOT_SEATED',
+        'INVALID_REJOIN_TOKEN',
+        'NOT_YOUR_SIDE',
+        'STALE_PLY',
+        'SEAT_TAKEN_OVER',
+        'MATCH_LIMIT',
+        'INTERNAL_ERROR',
+      ].sort(),
+    );
+    for (const [key, value] of Object.entries(MatchErrorCode)) expect(value).toBe(key);
   });
 });
 

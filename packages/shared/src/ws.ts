@@ -95,6 +95,8 @@ export const MatchErrorCode = {
   STALE_PLY: 'STALE_PLY',
   /** Pushed to a connection whose seat was rejoined from another connection. */
   SEAT_TAKEN_OVER: 'SEAT_TAKEN_OVER',
+  /** The server stores the maximum number of (waiting) matches; try again later. */
+  MATCH_LIMIT: 'MATCH_LIMIT',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const;
 

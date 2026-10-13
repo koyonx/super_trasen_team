@@ -8,7 +8,7 @@
 | `packages/shared/src/ws.ts` | プロトコル契約（イベント名・Zod スキーマ・ペイロード型・エラーコード）。**単一の正** |
 | `server/src/match/match.gateway.ts` | Socket.IO の入口。ハンドシェイク検証・ペイロード検証・ack・配信 |
 | `server/src/match/match.service.ts` | 対局のライフサイクル（席・状態遷移・エンジン呼び出し） |
-| `server/src/match/match.repository.ts` | 保存の境界（現状はインメモリ） |
+| `server/src/match/match.repository.ts` | 保存の境界（現状はインメモリ。保存数の上限もここ） |
 | `server/src/match/match.types.ts` | 保存形 `MatchRecord` / `SeatRecord`、`MatchError` |
 | `server/src/match/ws-auth.adapter.ts` | 認証の境界（現状はゲスト） |
 | `server/src/match/ws-origin.ts` | Origin 検証 |
@@ -251,7 +251,7 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
 
 `WsErrorCode = MatchErrorCode | EngineMoveErrorCode`。どちらも文字列コードで、FE は翻訳キーに対応付ける。
 
-### 4.1 プロトコル系（`MatchErrorCode`、15 種）
+### 4.1 プロトコル系（`MatchErrorCode`、16 種）
 
 | コード | 発生条件 |
 |---|---|
@@ -269,6 +269,7 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
 | `NOT_YOUR_SIDE` | move の `player` が自分の席の色と違う |
 | `STALE_PLY` | move の `ply` が現在の `state.ply` と違う（§6.2） |
 | `SEAT_TAKEN_OVER` | 自分の席が別の接続から rejoin された。旧接続に `match:error` で通知（ack ではない） |
+| `MATCH_LIMIT` | create したが、サーバーが保存できる対局数の上限（全体または `waiting`）に達している（§9.2）。時間をおいて再試行する |
 | `INTERNAL_ERROR` | 予期しない例外。詳細はサーバーログにだけ出る |
 
 `match:move` の検査順: スキーマ → `MATCH_NOT_FOUND` → `NOT_SEATED` → `NOT_YOUR_SIDE` → `MATCH_NOT_ACTIVE` → `STALE_PLY` → エンジン。
@@ -666,6 +667,7 @@ interface MatchRepository {
 
 | 契約 | 内容 |
 |---|---|
+| 上限 | `insert` は保存数が上限なら `MatchError(MATCH_LIMIT)` を投げてよい（インメモリ実装の上限は §9.2）。DB 実装はこの上限の代わりに期限ベースの掃除（§8.3）で対局数を抑える |
 | 値として扱う | 返したレコードを後から変更しない。渡されたレコードへの参照を保持しない（インメモリ実装は `structuredClone` で守っている） |
 | 書き込みの直列化 | 1 インスタンスなら `MatchService` のロックで足りる。複数インスタンスにするなら `revision` による楽観ロック（保存済みの revision が `revision - 1` の行だけ更新）が必要 |
 | 復元時の検証 | DB から読んだ `state` は返す前に必ずエンジンの `stateError` で検査する（[GUNGI_RULES.md](./GUNGI_RULES.md) §12.1）。壊れた状態を渡すとエンジンが例外を投げうる |
@@ -679,7 +681,8 @@ DB 化の際の注意（コードからの帰結）:
 ### 8.3 waiting 対局の掃除（未実装）
 
 現在、時間ベースの掃除は **ない**。作成者が leave せずに切断した `waiting` 対局は、プロセスが再起動するまでメモリに残る（§10.2）。
-DB 化するとこれは再起動でも消えなくなるため、次の方針で対応する:
+インメモリ実装では保存数の上限（§9.2）がメモリの無制限な増加だけを防いでいる。DB 化するとこれは再起動でも消えなくなるため、
+上限の代わりに次の方針で対応する:
 
 - 対局に期限（例: 最後の更新時刻からの放置期限）を保存し、起動時と定期的な見回りで期限切れの `waiting` 対局を削除する（§8.2 の「タイマー非依存」に従う）。
 - 削除はロック（`MatchService` 経由）の中で行い、同時に来た join と競合させない。
@@ -703,7 +706,21 @@ DB 化するとこれは再起動でも消えなくなるため、次の方針�
 - 未設定なら `https://localhost:8443` だけを許可する。ブラウザの URL（ホスト名・ポート）を変えたら必ず合わせる。合っていないと `FORBIDDEN_ORIGIN`。
 - server コンテナは `docker-compose.yml` の `env_file: .env` で読み込む。
 
-### 9.2 nginx の `/socket.io/`
+### 9.2 対局数の上限（MATCH_LIMIT_TOTAL / MATCH_LIMIT_WAITING）
+
+ゲストは認証なしで対局を作れるため、インメモリ実装（`InMemoryMatchRepository`）は保存する対局数に上限を持つ。
+
+| 環境変数 | 既定値 | 意味 |
+|---|---|---|
+| `MATCH_LIMIT_TOTAL` | `1000` | 保存する対局の総数（状態を問わない） |
+| `MATCH_LIMIT_WAITING` | `100` | 保存する `waiting` 対局の数 |
+
+- どちらかに達していると `match:create` は `MATCH_LIMIT` で失敗する。対局が削除される（§5.7）か、`waiting` 対局に参加者が来て `active` になれば、また作成できる。
+- 値は正の整数。未設定・不正な値（`0`、負数、小数、数字以外）は既定値になる。`match.module.ts` で `ConfigService` から読む。
+- 件数の確認と保存は `insert` の中で `await` を挟まずに行うので、同時に作成されても上限を超えない。
+- 期限ベースの掃除がないため、作成者が切断した `waiting` 対局は上限の枠を占有し続ける（§10.2）。上限はメモリ保護のための暫定措置で、DB 化で期限ベースの掃除に置き換える（§8.3）。
+
+### 9.3 nginx の `/socket.io/`
 
 | 設定 | 意味 |
 |---|---|
@@ -716,14 +733,14 @@ DB 化するとこれは再起動でも消えなくなるため、次の方針�
 Socket.IO の path は全名前空間で共通なので、`/match` 以外の名前空間を追加しても nginx の変更は不要。
 ポーリング（HTTP long-polling）もこの location で処理される。
 
-### 9.3 ビルド
+### 9.4 ビルド
 
 - `npm run build -w @gungi/server` → `nest build`。`nest-cli.json` で `webpack: true`、設定は `server/webpack.config.js`。
 - 理由: ワークスペースパッケージ（`@gungi/engine` / `@gungi/shared`）は `main` が `src/index.ts`（TypeScript ソース）を指しているため、
   素の `tsc` 出力からは実行時に `require` できない。webpack で `dist/main.js` に **同梱** し、それ以外の依存は外部扱いにして
   リポジトリルートの `node_modules`（npm workspaces で巻き上げ）から解決する（`nodeExternals` の `allowlist: [/^@gungi\//]`）。
 
-### 9.4 テスト
+### 9.5 テスト
 
 ```bash
 npm test -w @gungi/server        # server のみ（vitest run）
@@ -739,9 +756,10 @@ npm test                         # 全ワークスペース
 | `match.gateway.e2e.spec.ts` | 実際の Nest アプリを空きポートで起動し、socket.io-client で接続する e2e（ハンドシェイク拒否、不正ペイロード、1 接続 1 対局（同一接続からの並行 create / join を含む）、処理中の切断、作成→参加→着手→違反手→切断→rejoin→投了、席の乗っ取り） |
 | `match.service.spec.ts` | ライフサイクル・席・削除条件・ロック下の直列化 |
 | `contract.spec.ts` | 契約とエンジンの定義（エラーコード・駒種・手の型）が一致すること |
+| `match.repository.spec.ts` | インメモリ実装の保存数上限と環境変数の解釈 |
 | `ws-origin.spec.ts` / `ws-auth.adapter.spec.ts` / `keyed-mutex.spec.ts` | 各部品の単体テスト |
 
-### 9.5 スモーク（手動確認）の再現手順
+### 9.6 スモーク（手動確認）の再現手順
 
 ローカルで server だけ起動して確認する場合:
 
@@ -820,10 +838,12 @@ CI（`.github/workflows/ci.yml`）の compose スモークは現在 `/health` �
 - **時計なし**: 持ち時間・切れ負けはない。`MatchService.finishByServer`（`timeout` / `agreeDraw`）は将来のための配管で、どこからも呼ばれていない。
 - **対局の一覧・招待なし**: 参加には `matchId` を共有する必要がある（ロビー・招待は別機能）。
 - **保存はインメモリ**: サーバー再起動で全対局が消える（§8.2）。
+- **対局数の上限**: 既定で全体 1000 件・`waiting` 100 件まで。超えると create は `MATCH_LIMIT`（§9.2）。
 - **1 インスタンス前提**: ロック（対局ごと・接続ごと）とルームはプロセス内（§6.1）。
 
 ### 10.2 waiting 対局の滞留
 
 作成者が `match:leave` せずに切断（タブを閉じる等）した `waiting` 対局は削除されず、プロセス再起動まで残る。
 この対局には引き続き join でき、その場合は作成者が `connected: false` のまま `active` になる（作成者は rejoinToken で戻れる）。
+滞留した対局は `MATCH_LIMIT_WAITING` の枠も占有し続けるので、悪意のある大量作成では新規作成が `MATCH_LIMIT` で止まりうる（サーバーのメモリは守られる）。
 FE は画面を離れるときに可能なら `match:leave` を送ること。根本対応は §8.3。

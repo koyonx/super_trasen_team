@@ -302,6 +302,22 @@ describe('MatchService', () => {
     });
   });
 
+  describe('match limits', () => {
+    it('rejects creation at the cap and accepts it again once a match is freed', async () => {
+      const limited = new MatchService(new InMemoryMatchRepository({ total: 10, waiting: 1 }));
+      const options = { side: 'black', firstPlayer: 'black' } as const;
+      const first = await limited.create(alice, 'c-alice', options);
+      await expectCode(limited.create(bob, 'c-bob', options), 'MATCH_LIMIT');
+
+      await limited.leave(first.match.matchId, 'c-alice');
+      const second = await limited.create(bob, 'c-bob', options);
+      await expectCode(limited.create(carol, 'c-carol', options), 'MATCH_LIMIT');
+
+      await limited.join(second.match.matchId, carol, 'c-carol');
+      await expect(limited.create(alice, 'c-alice', options)).resolves.toBeDefined();
+    });
+  });
+
   describe('leave and cleanup', () => {
     it('discards a waiting match left by its creator', async () => {
       const created = await service.create(alice, 'c-alice', {
