@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",
+    "@nestjs/testing": "^11.2.7",
     "@swc/core": "^1.16.18",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
