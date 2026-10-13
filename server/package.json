@@ -8,18 +8,26 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@gungi/engine": "*",
     "@gungi/shared": "*",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
+    "@nestjs/platform-socket.io": "^11.2.7",
+    "@nestjs/websockets": "^11.2.7",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "socket.io": "^4.8.4"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",
+    "@swc/core": "^1.16.18",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
-    "typescript": "^5.7.0"
+    "socket.io-client": "^4.8.4",
+    "ts-loader": "^9.6.2",
+    "typescript": "^5.7.0",
+    "unplugin-swc": "^2.0.0"
   }
 }
