@@ -31,6 +31,7 @@ import type {
 } from '@gungi/shared';
 import type { GameState, Move } from '@gungi/engine';
 import type { Namespace, Socket } from 'socket.io';
+import { KeyedMutex } from './keyed-mutex';
 import { MatchService } from './match.service';
 import type { MatchView, SeatedView } from './match.service';
 import { MatchError } from './match.types';
@@ -69,6 +70,11 @@ function data(socket: Socket): ConnectionData {
  * never crashes. Each request is answered through its ack and, on failure,
  * with `match:error`. Changes are broadcast to the match room.
  *
+ * Socket.IO does not serialize the handlers of one socket, so the requests
+ * that change which seat a connection holds (`create`/`join`/`rejoin`/`leave`)
+ * and the disconnect cleanup run one at a time per socket. Lock order: the
+ * socket lock is always taken first, `MatchService`'s per-match lock inside it.
+ *
  * Served same-origin behind nginx (`/socket.io/`), so no CORS headers are
  * sent; the handshake `Origin` is checked against `APP_ORIGIN` instead.
  */
@@ -80,6 +86,8 @@ function data(socket: Socket): ConnectionData {
 })
 export class MatchGateway implements OnGatewayInit, OnGatewayDisconnect {
   private readonly logger = new Logger(MatchGateway.name);
+  /** Serializes seat-changing requests and the disconnect cleanup per socket id. */
+  private readonly seatLock = new KeyedMutex();
 
   @WebSocketServer()
   private readonly namespace!: Namespace;
@@ -104,18 +112,8 @@ export class MatchGateway implements OnGatewayInit, OnGatewayDisconnect {
     });
   }
 
-  async handleDisconnect(socket: Socket): Promise<void> {
-    const matchId = data(socket).matchId;
-    if (!matchId) return;
-    data(socket).matchId = undefined;
-    try {
-      const result = await this.matches.disconnect(matchId, socket.id);
-      if (result.match) {
-        this.broadcastConnection(matchId, result.side, result.playerId, false);
-      }
-    } catch (error) {
-      if (!(error instanceof MatchError)) this.logger.error(error);
-    }
+  handleDisconnect(socket: Socket): Promise<void> {
+    return this.seatLock.run(socket.id, () => this.detachConnection(socket));
   }
 
   @SubscribeMessage(ClientEvent.CREATE)
@@ -123,13 +121,15 @@ export class MatchGateway implements OnGatewayInit, OnGatewayDisconnect {
     @ConnectedSocket() socket: Socket,
     @MessageBody() body: unknown,
   ): Promise<WsAck<Acks['match:create']>> {
-    return this.handle(socket, ClientEvent.CREATE, body, async (input) => {
-      await this.releaseCurrent(socket);
-      const result = await this.matches.create(this.identity(socket), socket.id, input);
-      await this.attach(socket, result.match.matchId);
-      socket.emit(ServerEvent.CREATED, result);
-      return result;
-    });
+    return this.handle(socket, ClientEvent.CREATE, body, (input) =>
+      this.seatOperation(socket, async () => {
+        await this.releaseCurrent(socket);
+        const result = await this.matches.create(this.identity(socket), socket.id, input);
+        await this.attach(socket, result.match.matchId);
+        socket.emit(ServerEvent.CREATED, result);
+        return result;
+      }),
+    );
   }
 
   @SubscribeMessage(ClientEvent.JOIN)
@@ -137,13 +137,19 @@ export class MatchGateway implements OnGatewayInit, OnGatewayDisconnect {
     @ConnectedSocket() socket: Socket,
     @MessageBody() body: unknown,
   ): Promise<WsAck<Acks['match:join']>> {
-    return this.handle(socket, ClientEvent.JOIN, body, async ({ matchId }) => {
-      await this.releaseCurrent(socket, matchId);
-      const result: SeatedView = await this.matches.join(matchId, this.identity(socket), socket.id);
-      await this.attach(socket, matchId);
-      this.namespace.to(matchRoom(matchId)).emit(ServerEvent.STATE, result.match);
-      return result;
-    });
+    return this.handle(socket, ClientEvent.JOIN, body, ({ matchId }) =>
+      this.seatOperation(socket, async () => {
+        await this.releaseCurrent(socket, matchId);
+        const result: SeatedView = await this.matches.join(
+          matchId,
+          this.identity(socket),
+          socket.id,
+        );
+        await this.attach(socket, matchId);
+        this.namespace.to(matchRoom(matchId)).emit(ServerEvent.STATE, result.match);
+        return result;
+      }),
+    );
   }
 
   @SubscribeMessage(ClientEvent.REJOIN)
@@ -151,20 +157,22 @@ export class MatchGateway implements OnGatewayInit, OnGatewayDisconnect {
     @ConnectedSocket() socket: Socket,
     @MessageBody() body: unknown,
   ): Promise<WsAck<Acks['match:rejoin']>> {
-    return this.handle(socket, ClientEvent.REJOIN, body, async ({ matchId, rejoinToken }) => {
-      await this.releaseCurrent(socket, matchId);
-      const { replacedConnectionId, ...result } = await this.matches.rejoin(
-        matchId,
-        rejoinToken,
-        this.identity(socket),
-        socket.id,
-      );
-      if (replacedConnectionId) this.evict(replacedConnectionId, matchId);
-      await this.attach(socket, matchId);
-      this.broadcastConnection(matchId, result.you.side, result.you.playerId, true, socket);
-      socket.emit(ServerEvent.STATE, result.match);
-      return result;
-    });
+    return this.handle(socket, ClientEvent.REJOIN, body, ({ matchId, rejoinToken }) =>
+      this.seatOperation(socket, async () => {
+        await this.releaseCurrent(socket, matchId);
+        const { replacedConnectionId, ...result } = await this.matches.rejoin(
+          matchId,
+          rejoinToken,
+          this.identity(socket),
+          socket.id,
+        );
+        if (replacedConnectionId) this.evict(replacedConnectionId, matchId);
+        await this.attach(socket, matchId);
+        this.broadcastConnection(matchId, result.you.side, result.you.playerId, true, socket);
+        socket.emit(ServerEvent.STATE, result.match);
+        return result;
+      }),
+    );
   }
 
   @SubscribeMessage(ClientEvent.MOVE)
@@ -184,13 +192,15 @@ export class MatchGateway implements OnGatewayInit, OnGatewayDisconnect {
     @ConnectedSocket() socket: Socket,
     @MessageBody() body: unknown,
   ): Promise<WsAck<LeftPayload>> {
-    return this.handle(socket, ClientEvent.LEAVE, body, async ({ matchId }) => {
-      const result = await this.matches.leave(matchId, socket.id);
-      await socket.leave(matchRoom(matchId));
-      if (data(socket).matchId === matchId) data(socket).matchId = undefined;
-      if (result.match) this.broadcastConnection(matchId, result.side, result.playerId, false);
-      return { matchId };
-    });
+    return this.handle(socket, ClientEvent.LEAVE, body, ({ matchId }) =>
+      this.seatOperation(socket, async () => {
+        const result = await this.matches.leave(matchId, socket.id);
+        await socket.leave(matchRoom(matchId));
+        if (data(socket).matchId === matchId) data(socket).matchId = undefined;
+        if (result.match) this.broadcastConnection(matchId, result.side, result.playerId, false);
+        return { matchId };
+      }),
+    );
   }
 
   /** Runs a request: parse, execute, ack, and report failures as codes. */
@@ -212,6 +222,37 @@ export class MatchGateway implements OnGatewayInit, OnGatewayDisconnect {
       const payload: MatchErrorPayload = matchId ? { code, event, matchId } : { code, event };
       socket.emit(ServerEvent.ERROR, payload);
       return { ok: false, code };
+    }
+  }
+
+  /**
+   * Runs a seat-changing request alone for its socket. If the socket
+   * disconnected meanwhile, its disconnect cleanup has to run again here: the
+   * request may have bound a seat to the dead connection after the cleanup.
+   */
+  private seatOperation<T>(socket: Socket, execute: () => Promise<T>): Promise<T> {
+    return this.seatLock.run(socket.id, async () => {
+      try {
+        return await execute();
+      } finally {
+        if (!socket.connected) await this.detachConnection(socket);
+      }
+    });
+  }
+
+  /** Disconnect cleanup: unbinds the connection from its match, keeping the seat. */
+  private async detachConnection(socket: Socket): Promise<void> {
+    const matchId = data(socket).matchId;
+    if (!matchId) return;
+    data(socket).matchId = undefined;
+    try {
+      await socket.leave(matchRoom(matchId));
+      const result = await this.matches.disconnect(matchId, socket.id);
+      if (result.match) {
+        this.broadcastConnection(matchId, result.side, result.playerId, false);
+      }
+    } catch (error) {
+      if (!(error instanceof MatchError)) this.logger.error(error);
     }
   }
 

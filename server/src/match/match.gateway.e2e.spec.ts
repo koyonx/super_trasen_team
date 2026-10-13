@@ -11,6 +11,7 @@ import {
   WS_NAMESPACE,
   WS_PATH,
   WS_PROTOCOL_VERSION,
+  matchRoom,
 } from '@gungi/shared';
 import type {
   MatchErrorPayload,
@@ -19,7 +20,12 @@ import type {
   SeatedPayload,
   WsAck,
 } from '@gungi/shared';
+import type { Namespace } from 'socket.io';
+import { MatchGateway } from './match.gateway';
 import { MatchModule } from './match.module';
+import { InMemoryMatchRepository, MATCH_REPOSITORY } from './match.repository';
+import { MatchService } from './match.service';
+import type { MatchRecord } from './match.types';
 
 type Snapshot = MatchSnapshot<GameState, Move>;
 type Seated = SeatedPayload<GameState, Move>;
@@ -27,18 +33,55 @@ type Seated = SeatedPayload<GameState, Move>;
 const ORIGIN = 'https://localhost:8443';
 const TIMEOUT = 2000;
 
+/** In-memory repository whose next `insert` can be held open (simulated slow I/O). */
+class GatedMatchRepository extends InMemoryMatchRepository {
+  private gate: { entered: () => void; opened: Promise<void> } | null = null;
+  readonly inserted: string[] = [];
+
+  /** Holds the next insert; resolves `entered` once it is in flight. */
+  holdNextInsert(): { entered: Promise<void>; release: () => void } {
+    let release!: () => void;
+    let entered!: () => void;
+    const opened = new Promise<void>((resolve) => (release = resolve));
+    const enteredPromise = new Promise<void>((resolve) => (entered = resolve));
+    this.gate = { entered, opened };
+    return { entered: enteredPromise, release };
+  }
+
+  override async insert(match: MatchRecord): Promise<void> {
+    const gate = this.gate;
+    this.gate = null;
+    if (gate) {
+      gate.entered();
+      await gate.opened;
+    }
+    this.inserted.push(match.id);
+    await super.insert(match);
+  }
+}
+
+async function startApp(repository?: InMemoryMatchRepository): Promise<INestApplication> {
+  let builder = Test.createTestingModule({
+    imports: [ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }), MatchModule],
+  });
+  if (repository) builder = builder.overrideProvider(MATCH_REPOSITORY).useValue(repository);
+  const app = (await builder.compile()).createNestApplication({ logger: false });
+  await app.listen(0, '127.0.0.1');
+  return app;
+}
+
+async function namespaceUrl(app: INestApplication): Promise<string> {
+  return `${await app.getUrl()}${WS_NAMESPACE}`.replace('[::1]', '127.0.0.1');
+}
+
 describe('MatchGateway (socket.io e2e)', () => {
   let app: INestApplication;
   let url: string;
   const sockets: Socket[] = [];
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }), MatchModule],
-    }).compile();
-    app = moduleRef.createNestApplication({ logger: false });
-    await app.listen(0, '127.0.0.1');
-    url = `${await app.getUrl()}${WS_NAMESPACE}`.replace('[::1]', '127.0.0.1');
+    app = await startApp();
+    url = await namespaceUrl(app);
   });
 
   afterEach(() => {
@@ -50,9 +93,9 @@ describe('MatchGateway (socket.io e2e)', () => {
   });
 
   function client(
-    options: { origin?: string; auth?: Record<string, unknown>; connect?: boolean } = {},
+    options: { origin?: string; auth?: Record<string, unknown>; url?: string } = {},
   ): Socket {
-    const socket = io(url, {
+    const socket = io(options.url ?? url, {
       path: WS_PATH,
       transports: ['websocket'],
       forceNew: true,
@@ -102,6 +145,15 @@ describe('MatchGateway (socket.io e2e)', () => {
     return ack.data;
   }
 
+  /** Polls `condition` until it holds (server-side effects of a disconnect are asynchronous). */
+  async function until(condition: () => Promise<boolean>): Promise<void> {
+    const deadline = Date.now() + TIMEOUT;
+    while (!(await condition())) {
+      if (Date.now() > deadline) throw new Error('condition not met in time');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
   describe('handshake', () => {
     it('rejects a foreign origin', async () => {
       const error = await connectError(client({ origin: 'https://evil.example' }));
@@ -147,6 +199,44 @@ describe('MatchGateway (socket.io e2e)', () => {
         ok: false,
         code: 'ALREADY_IN_MATCH',
       });
+    });
+
+    it('seats one socket once under parallel seat requests and frees it on disconnect', async () => {
+      const service = app.get(MatchService);
+      const repository = app.get<InMemoryMatchRepository>(MATCH_REPOSITORY);
+      const before = repository.size;
+      const socket = await connected(client());
+
+      const acks = await Promise.all(
+        Array.from({ length: 5 }, () => request<Seated>(socket, ClientEvent.CREATE, {})),
+      );
+      const created = acks.filter((ack) => ack.ok);
+      expect(created).toHaveLength(1);
+      expect(acks.filter((ack) => !ack.ok)).toEqual(
+        Array.from({ length: 4 }, () => ({ ok: false, code: 'ALREADY_IN_MATCH' })),
+      );
+      expect(repository.size).toBe(before + 1);
+
+      const matchIds = created.map((ack) => expectOk(ack).match.matchId);
+      socket.disconnect();
+      await until(async () => {
+        const views = await Promise.all(matchIds.map((id) => service.get(id)));
+        return views.every(
+          (view) => view?.seats.black?.connected !== true && view?.seats.white?.connected !== true,
+        );
+      });
+    });
+
+    it('seats one socket once under a parallel create and join', async () => {
+      const [host, socket] = await Promise.all([connected(client()), connected(client())]);
+      const { match } = expectOk(await request<Seated>(host, ClientEvent.CREATE, {}));
+
+      const acks = await Promise.all([
+        request<Seated>(socket, ClientEvent.CREATE, {}),
+        request<Seated>(socket, ClientEvent.JOIN, { matchId: match.matchId }),
+      ]);
+      expect(acks.filter((ack) => ack.ok)).toHaveLength(1);
+      expect(acks.filter((ack) => !ack.ok)).toEqual([{ ok: false, code: 'ALREADY_IN_MATCH' }]);
     });
 
     it('discards a waiting match left by its creator', async () => {
@@ -280,5 +370,43 @@ describe('MatchGateway (socket.io e2e)', () => {
     expect(
       await request(alice2, ClientEvent.REJOIN, { matchId, rejoinToken: 'A'.repeat(43) }),
     ).toEqual({ ok: false, code: 'INVALID_REJOIN_TOKEN' });
+  });
+
+  describe('disconnect during a seat request', () => {
+    let gatedApp: INestApplication;
+    let gatedUrl: string;
+    const repository = new GatedMatchRepository();
+
+    beforeAll(async () => {
+      gatedApp = await startApp(repository);
+      gatedUrl = await namespaceUrl(gatedApp);
+    });
+
+    afterAll(async () => {
+      await gatedApp.close();
+    });
+
+    it('does not leave the seat bound to the dead connection', async () => {
+      const namespace = (gatedApp.get(MatchGateway) as unknown as { namespace: Namespace })
+        .namespace;
+      const service = gatedApp.get(MatchService);
+      const socket = await connected(client({ url: gatedUrl }));
+      const socketId = socket.id as string;
+
+      const held = repository.holdNextInsert();
+      socket.emit(ClientEvent.CREATE, {});
+      await held.entered;
+      socket.disconnect();
+      await until(async () => !namespace.sockets.has(socketId));
+      held.release();
+
+      await until(async () => repository.inserted.length === 1);
+      const matchId = repository.inserted[0] as string;
+      await until(async () => {
+        const view = await service.get(matchId);
+        return view !== null && [view.seats.black, view.seats.white].every((s) => !s?.connected);
+      });
+      expect(namespace.adapter.rooms.get(matchRoom(matchId))).toBeUndefined();
+    });
   });
 });

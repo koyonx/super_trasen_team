@@ -12,7 +12,7 @@
 | `server/src/match/match.types.ts` | 保存形 `MatchRecord` / `SeatRecord`、`MatchError` |
 | `server/src/match/ws-auth.adapter.ts` | 認証の境界（現状はゲスト） |
 | `server/src/match/ws-origin.ts` | Origin 検証 |
-| `server/src/match/keyed-mutex.ts` | 対局ごとの直列化ロック |
+| `server/src/match/keyed-mutex.ts` | キーごとの直列化ロック（対局ごと・接続ごと） |
 | `server/src/match/match.module.ts` | DI 配線（差し替え口） |
 
 ---
@@ -369,6 +369,8 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
 **1 接続 1 対局**: create / join / rejoin の前に、接続が参加中の対局を確認する（`releaseCurrent`）。
 参加中の対局が未終了なら `ALREADY_IN_MATCH`。終了済み（または消えている）なら自動的にそこから退出してから新しい対局に入る。
 同じ対局への join / rejoin はこの確認を素通りし、`MatchService` の判定（`ALREADY_SEATED` など）に任せる。
+この確認から着席（`socket.data.matchId` の設定）までは **接続ごとに直列化** されている（§6.1）。同じ接続から create / join を並行して
+送っても、成功するのは 1 つだけで、残りは `ALREADY_IN_MATCH` になる。
 
 ### 5.7 finished 対局の削除条件
 
@@ -392,6 +394,19 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
 
 - 1 つの処理が失敗しても、後続の処理の列は壊れない。使われなくなったキーは自動で消える。
 - ロックはプロセス内のみ。サーバーは 1 インスタンス前提（複数台にする場合は §8.2 の revision 楽観ロックが必要）。
+
+### 6.1.1 接続ごとのロック
+
+Socket.IO は同じ接続のイベントハンドラを直列に実行しない（`await` をまたいで並行に進む）。そのため `MatchGateway` は、
+接続が持つ席を変える要求 **`match:create` / `match:join` / `match:rejoin` / `match:leave` と切断時の後始末** を、
+もう 1 つの `KeyedMutex` で **接続 ID（`socket.id`）ごと** に 1 つずつ実行する。これにより「参加中の対局の確認（`releaseCurrent`）→
+着席 → `socket.data.matchId` の設定」が同じ接続の別の要求と交錯せず、1 接続 1 未終了対局（§5.6）が保たれる。
+
+- **ロックの順序**: 必ず接続のロックが外側、対局のロック（`MatchService` 内部）が内側。逆順に取る経路はないのでデッドロックしない。
+- `match:move` は席の結び付きを変えないので接続ロックを取らない（対局ロックだけ）。
+- **処理中の切断**: 切断時の後始末も同じ接続ロックに並ぶので、実行中の要求が終わってから走る。加えて、席を変える要求の終了時に
+  接続がすでに切れていれば（`socket.connected === false`）、その場で後始末（ルームから外す + `MatchService.disconnect`）を行う。
+  リポジトリが実際の I/O を伴うようになっても、切れた接続 ID に席が結び付いたまま残ることはない。
 
 ### 6.2 ply ガード（STALE_PLY）
 
@@ -704,7 +719,7 @@ npm test                         # 全ワークスペース
 
 | ファイル | 内容 |
 |---|---|
-| `match.gateway.e2e.spec.ts` | 実際の Nest アプリを空きポートで起動し、socket.io-client で接続する e2e（ハンドシェイク拒否、不正ペイロード、1 接続 1 対局、作成→参加→着手→違反手→切断→rejoin→投了、席の乗っ取り） |
+| `match.gateway.e2e.spec.ts` | 実際の Nest アプリを空きポートで起動し、socket.io-client で接続する e2e（ハンドシェイク拒否、不正ペイロード、1 接続 1 対局（同一接続からの並行 create / join を含む）、処理中の切断、作成→参加→着手→違反手→切断→rejoin→投了、席の乗っ取り） |
 | `match.service.spec.ts` | ライフサイクル・席・削除条件・ロック下の直列化 |
 | `contract.spec.ts` | 契約とエンジンの定義（エラーコード・駒種・手の型）が一致すること |
 | `ws-origin.spec.ts` / `ws-auth.adapter.spec.ts` / `keyed-mutex.spec.ts` | 各部品の単体テスト |
@@ -788,7 +803,7 @@ CI（`.github/workflows/ci.yml`）の compose スモークは現在 `/health` �
 - **時計なし**: 持ち時間・切れ負けはない。`MatchService.finishByServer`（`timeout` / `agreeDraw`）は将来のための配管で、どこからも呼ばれていない。
 - **対局の一覧・招待なし**: 参加には `matchId` を共有する必要がある（ロビー・招待は別機能）。
 - **保存はインメモリ**: サーバー再起動で全対局が消える（§8.2）。
-- **1 インスタンス前提**: ロックとルームはプロセス内（§6.1）。
+- **1 インスタンス前提**: ロック（対局ごと・接続ごと）とルームはプロセス内（§6.1）。
 
 ### 10.2 waiting 対局の滞留
 
