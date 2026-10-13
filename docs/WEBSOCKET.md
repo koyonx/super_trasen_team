@@ -265,7 +265,7 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
 | `ALREADY_SEATED` | join した接続がすでにその対局の席に結び付いている、または同じ `playerId` がすでに席を持っている |
 | `ALREADY_IN_MATCH` | create / join / rejoin した接続が、**別の未終了の** 対局に参加中 |
 | `NOT_SEATED` | move / leave した接続がその対局の席に結び付いていない（leave 後や `SEAT_TAKEN_OVER` 後を含む） |
-| `INVALID_REJOIN_TOKEN` | rejoinToken がどちらの席とも一致しない |
+| `INVALID_REJOIN_TOKEN` | rejoinToken がどちらの席とも一致しない。または一致した席が認証済みユーザーの席で、要求元が同じユーザーでない（§5.5） |
 | `NOT_YOUR_SIDE` | move の `player` が自分の席の色と違う |
 | `STALE_PLY` | move の `ply` が現在の `state.ply` と違う（§6.2） |
 | `SEAT_TAKEN_OVER` | 自分の席が別の接続から rejoin された。旧接続に `match:error` で通知（ack ではない） |
@@ -357,7 +357,9 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
 - **切断**: 席は保持され、その席の接続が外れる（`connected: false`）。ルームの残りに `match:playerConnection` が届く。
   `waiting` 対局でも削除しない（§10.2）。`finished` 対局で両席とも未接続になれば削除。
 - **rejoin**: 新しい接続から `match:rejoin { matchId, rejoinToken }` を送る。トークンが席の所有の証明であり、
-  ゲストの identity は接続ごとに変わるため、席の `playerId` は **新しい接続の identity に付け替えられる**（`displayName` は新しい値があればそれ、なければ元の値）。
+  ゲストの identity は接続ごとに変わるため、**ゲストが持つ席** の `playerId` は **新しい接続の identity に付け替えられる**（`displayName` は新しい値があればそれ、なければ元の値）。
+  **認証済みユーザー（`kind: 'user'`）が持つ席** は、同じユーザー（同じ `playerId`）の接続にしか付け替えない。別のユーザーやゲストからは、
+  トークンが正しくても `INVALID_REJOIN_TOKEN`（トークンが漏れても他のアカウントに席を渡さない）。席の identity の種別は `SeatRecord.kind` に保存される。
   rejoin は対局の状態（waiting / active / finished）を問わず、対局が存在する限り成功する。
 - 成功すると本人に ack と `match:state`、相手に `match:playerConnection`（`connected: true`、新しい `playerId`）が届く。
 - rejoinToken は対局中ずっと同じ値（rejoin しても再発行されない）。
@@ -634,7 +636,7 @@ export class MatchClient {
 interface WsAuthAdapter {
   authenticate(context: { headers: IncomingHttpHeaders; auth: HandshakeAuth }): Promise<WsIdentity | null>;
 }
-interface WsIdentity { kind: 'guest' | 'user'; playerId: string; displayName: string | null }
+type WsIdentity = PlayerIdentity; // { kind: 'guest' | 'user'; playerId: string; displayName: string | null }
 ```
 
 - 接続ごとに 1 回、どのイベントより先に呼ばれる。`null` を返すと `UNAUTHENTICATED` で接続を拒否する。
@@ -644,8 +646,9 @@ interface WsIdentity { kind: 'guest' | 'user'; playerId: string; displayName: st
   **現在の `MatchRepository` インターフェースにはこの検索はない**（追加が必要）。トークンの経過時間だけで拒否しないこと。
 - 再接続のたびに `authenticate` を通る。席に戻るには引き続き rejoinToken が必要。
 - 安定した `playerId` になると、`ALREADY_SEATED` の「同じ `playerId` がすでに席を持っている」判定が効き始める（同一ユーザーが両方の席に座れない）。
-- 検討事項: 現在の rejoin はトークンさえ一致すれば席の `playerId` を新しい identity に付け替える（ゲストでは identity が毎回変わるため）。
-  ユーザー認証後は「元の `playerId` と同じユーザーのときだけ rejoin を許す」を追加するか検討すること。
+- **`kind: 'user'` は検証済みのアカウントにだけ** 付け、`playerId` にはアカウント ID を入れること。`MatchService.rejoin` はこれを前提に、
+  ユーザーが持つ席を **同じユーザーにしか付け替えない**（別ユーザー・ゲストはトークンが正しくても `INVALID_REJOIN_TOKEN`。実装済み、§5.5）。
+  トークンだけで別の identity に付け替えられるのはゲストが持つ席だけ。
 
 ### 8.2 MatchRepository（Prisma 化）
 

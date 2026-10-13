@@ -8,9 +8,11 @@ import { MatchService } from './match.service';
 import { MatchError } from './match.types';
 import type { PlayerIdentity } from './match.types';
 
-const alice: PlayerIdentity = { playerId: 'guest_alice', displayName: 'Alice' };
-const bob: PlayerIdentity = { playerId: 'guest_bob', displayName: null };
-const carol: PlayerIdentity = { playerId: 'guest_carol', displayName: 'Carol' };
+const alice: PlayerIdentity = { kind: 'guest', playerId: 'guest_alice', displayName: 'Alice' };
+const bob: PlayerIdentity = { kind: 'guest', playerId: 'guest_bob', displayName: null };
+const carol: PlayerIdentity = { kind: 'guest', playerId: 'guest_carol', displayName: 'Carol' };
+const dave: PlayerIdentity = { kind: 'user', playerId: 'user_dave', displayName: 'Dave' };
+const erin: PlayerIdentity = { kind: 'user', playerId: 'user_erin', displayName: 'Erin' };
 
 const MISSING_ID = '00000000-0000-4000-8000-000000000000';
 const marshal = (file: number, rank: number): ClientMove => ({
@@ -243,7 +245,7 @@ describe('MatchService', () => {
       await expectCode(service.rejoin(id, 'x'.repeat(43), carol, 'c-x'), 'INVALID_REJOIN_TOKEN');
       await expectCode(service.applyMove(id, 'c-bob', marshal(4, 8)), 'NOT_SEATED');
 
-      const bob2: PlayerIdentity = { playerId: 'guest_bob2', displayName: null };
+      const bob2: PlayerIdentity = { kind: 'guest', playerId: 'guest_bob2', displayName: null };
       const back = await service.rejoin(id, joined.you.rejoinToken, bob2, 'c-bob2');
       expect(back.replacedConnectionId).toBeNull();
       expect(back.you).toEqual({ ...joined.you, playerId: 'guest_bob2' });
@@ -251,6 +253,37 @@ describe('MatchService', () => {
       expect(back.match.state?.ply).toBe(1);
 
       await expect(service.applyMove(id, 'c-bob2', marshal(4, 8))).resolves.toBeDefined();
+    });
+
+    it('rebinds a user seat only to the same user, even with a valid token', async () => {
+      const created = await service.create(dave, 'c-dave', { side: 'black', firstPlayer: 'black' });
+      const id = created.match.matchId;
+      await service.join(id, bob, 'c-bob');
+      await service.disconnect(id, 'c-dave');
+      const token = created.you.rejoinToken;
+
+      await expectCode(service.rejoin(id, token, erin, 'c-erin'), 'INVALID_REJOIN_TOKEN');
+      await expectCode(service.rejoin(id, token, carol, 'c-carol'), 'INVALID_REJOIN_TOKEN');
+      expect((await service.get(id))?.seats.black).toEqual({
+        playerId: 'user_dave',
+        displayName: 'Dave',
+        connected: false,
+      });
+
+      const back = await service.rejoin(id, token, dave, 'c-dave2');
+      expect(back.you.playerId).toBe('user_dave');
+      await expect(service.applyMove(id, 'c-dave2', marshal(4, 0))).resolves.toBeDefined();
+    });
+
+    it('rebinds a guest seat to an authenticated user presenting its token', async () => {
+      const { id, joined } = await activeMatch();
+      const back = await service.rejoin(id, joined.you.rejoinToken, dave, 'c-dave');
+      expect(back.you.playerId).toBe('user_dave');
+      await service.disconnect(id, 'c-dave');
+      await expectCode(
+        service.rejoin(id, joined.you.rejoinToken, erin, 'c-erin'),
+        'INVALID_REJOIN_TOKEN',
+      );
     });
 
     it('reports a connection replaced by a rejoin', async () => {

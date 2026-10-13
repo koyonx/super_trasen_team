@@ -1,8 +1,12 @@
 import type { GameState, Move, PlayerSide } from '@gungi/engine';
 import type { MatchStatus, WsErrorCode } from '@gungi/shared';
 
+/** `guest`: per-connection identity. `user`: authenticated account (stable `playerId`). */
+export type PlayerKind = 'guest' | 'user';
+
 /** Who is acting, as resolved by the transport's auth adapter. */
 export interface PlayerIdentity {
+  readonly kind: PlayerKind;
   readonly playerId: string;
   /** Sanitized data, not rendered by the server. */
   readonly displayName: string | null;
@@ -10,6 +14,8 @@ export interface PlayerIdentity {
 
 /** A held seat. `connectionId` is the transport connection currently bound to it. */
 export interface SeatRecord {
+  /** Kind of the identity holding the seat; a `user` seat is rebound only to the same user. */
+  readonly kind: PlayerKind;
   readonly playerId: string;
   readonly displayName: string | null;
   /** Secret proof of seat ownership for rejoining; never broadcast. */

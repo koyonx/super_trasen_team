@@ -47,6 +47,9 @@ const SIDES: readonly PlayerSide[] = ['black', 'white'];
  * disconnected player keeps the seat and binds a new connection with the
  * seat's rejoin token while the match exists.
  *
+ * Rejoining rebinds a guest-held seat to the presenting identity; a seat held
+ * by an authenticated user is rebound only to that same user.
+ *
  * Matches are discarded when nobody can come back to them: a waiting match
  * left by its creator, or a finished match with no connected seat. There is
  * no time-based cleanup yet (no clocks in scope); a waiting match whose
@@ -111,11 +114,21 @@ export class MatchService {
       const seat = side && match.seats[side];
       if (!side || !seat) throw new MatchError(MatchErrorCode.INVALID_REJOIN_TOKEN);
 
+      // A user's seat belongs to that account: a leaked token must not hand
+      // it to another account (or to a guest).
+      if (
+        seat.kind === 'user' &&
+        (identity.kind !== 'user' || identity.playerId !== seat.playerId)
+      ) {
+        throw new MatchError(MatchErrorCode.INVALID_REJOIN_TOKEN);
+      }
+
       const previous = seat.connectionId;
-      // The token is the proof of ownership; guest identities change on
-      // every connection, so the seat is rebound to the new identity.
+      // For a guest seat the token is the proof of ownership; guest identities
+      // change on every connection, so the seat is rebound to the new identity.
       const rebound: SeatRecord = {
         ...seat,
+        kind: identity.kind,
         playerId: identity.playerId,
         displayName: identity.displayName ?? seat.displayName,
         connectionId,
@@ -229,6 +242,7 @@ function resolveSide(choice: SideChoice): PlayerSide {
 
 function newSeat(identity: PlayerIdentity, connectionId: string): SeatRecord {
   return {
+    kind: identity.kind,
     playerId: identity.playerId,
     displayName: identity.displayName,
     rejoinToken: randomBytes(32).toString('base64url'),

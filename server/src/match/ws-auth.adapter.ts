@@ -7,9 +7,8 @@ import type { PlayerIdentity } from './match.types';
 /** Injection token for the active `WsAuthAdapter` implementation. */
 export const WS_AUTH_ADAPTER = Symbol('WS_AUTH_ADAPTER');
 
-export interface WsIdentity extends PlayerIdentity {
-  readonly kind: 'guest' | 'user';
-}
+/** Identity of a connection; `kind` tells guests and authenticated users apart. */
+export type WsIdentity = PlayerIdentity;
 
 /** What an adapter may inspect when a Socket.IO connection is established. */
 export interface WsHandshakeContext {
@@ -37,6 +36,10 @@ export interface WsHandshakeContext {
  *  - Re-validate on reconnect: every new connection passes through
  *    `authenticate` again; rejoining a seat still requires the seat's rejoin
  *    token.
+ *  - Return `kind: 'user'` only for a verified account, with the account id
+ *    as `playerId`. `MatchService` rebinds a seat held by a user only to that
+ *    same user (`INVALID_REJOIN_TOKEN` otherwise, even with a valid token);
+ *    only guest-held seats are rebound to whoever presents the token.
  */
 export interface WsAuthAdapter {
   authenticate(context: WsHandshakeContext): Promise<WsIdentity | null>;
