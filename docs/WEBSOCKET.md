@@ -259,7 +259,7 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
 | `UNSUPPORTED_PROTOCOL` | ハンドシェイクの `protocolVersion` が欠落、または 1 以外 |
 | `FORBIDDEN_ORIGIN` | ハンドシェイクの `Origin` ヘッダーが存在し、許可オリジンでない |
 | `UNAUTHENTICATED` | 認証アダプタが `null` を返した（`GuestAuthAdapter` は返さない） |
-| `MATCH_NOT_FOUND` | join / rejoin / move / leave の対象対局が存在しない（削除済みを含む） |
+| `MATCH_NOT_FOUND` | join / rejoin / move / leave の対象対局が存在しない（削除済み、上限による追い出し済み（§9.2）を含む） |
 | `MATCH_FULL` | join したが対局が `active`（両席とも埋まっている）。観戦はない |
 | `MATCH_NOT_ACTIVE` | move したが対局が `active` でない（`waiting` または `finished`）。join したが対局が `finished` |
 | `ALREADY_SEATED` | join した接続がすでにその対局の席に結び付いている、または同じ `playerId` がすでに席を持っている |
@@ -269,7 +269,7 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
 | `NOT_YOUR_SIDE` | move の `player` が自分の席の色と違う |
 | `STALE_PLY` | move の `ply` が現在の `state.ply` と違う（§6.2） |
 | `SEAT_TAKEN_OVER` | 自分の席が別の接続から rejoin された。旧接続に `match:error` で通知（ack ではない） |
-| `MATCH_LIMIT` | create したが、サーバーが保存できる対局数の上限（全体または `waiting`）に達している（§9.2）。時間をおいて再試行する |
+| `MATCH_LIMIT` | create したが、サーバーが保存できる対局数の上限（全体または `waiting`）に達しており、追い出せる対局（どの席にも接続がない対局）でも空きを作れない（§9.2）。時間をおいて再試行する |
 | `INTERNAL_ERROR` | 予期しない例外。詳細はサーバーログにだけ出る |
 
 `match:move` の検査順: スキーマ → `MATCH_NOT_FOUND` → `NOT_SEATED` → `NOT_YOUR_SIDE` → `MATCH_NOT_ACTIVE` → `STALE_PLY` → エンジン。
@@ -357,11 +357,12 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
 
 - **切断**: 席は保持され、その席の接続が外れる（`connected: false`）。ルームの残りに `match:playerConnection` が届く。
   `waiting` 対局でも削除しない（§10.2）。`finished` 対局で両席とも未接続になれば削除。
+  どの席にも接続がない対局は、対局数の上限に達したときに追い出されうる（§9.2）。追い出された後の rejoin / join は `MATCH_NOT_FOUND`。
 - **rejoin**: 新しい接続から `match:rejoin { matchId, rejoinToken }` を送る。トークンが席の所有の証明であり、
   ゲストの identity は接続ごとに変わるため、**ゲストが持つ席** の `playerId` は **新しい接続の identity に付け替えられる**（`displayName` は新しい値があればそれ、なければ元の値）。
   **認証済みユーザー（`kind: 'user'`）が持つ席** は、同じユーザー（同じ `playerId`）の接続にしか付け替えない。別のユーザーやゲストからは、
   トークンが正しくても `INVALID_REJOIN_TOKEN`（トークンが漏れても他のアカウントに席を渡さない）。席の identity の種別は `SeatRecord.kind` に保存される。
-  rejoin は対局の状態（waiting / active / finished）を問わず、対局が存在する限り成功する。
+  rejoin は対局の状態（waiting / active / finished）を問わず、対局が存在する限り成功する（追い出し（§9.2）の後は `MATCH_NOT_FOUND`）。
 - 成功すると本人に ack と `match:state`、相手に `match:playerConnection`（`connected: true`、新しい `playerId`）が届く。
 - rejoinToken は対局中ずっと同じ値（rejoin しても再発行されない）。
 
@@ -667,7 +668,7 @@ interface MatchRepository {
 
 | 契約 | 内容 |
 |---|---|
-| 上限 | `insert` は保存数が上限なら `MatchError(MATCH_LIMIT)` を投げてよい（インメモリ実装の上限は §9.2）。DB 実装はこの上限の代わりに期限ベースの掃除（§8.3）で対局数を抑える |
+| 上限 | `insert` は保存数が上限なら `MatchError(MATCH_LIMIT)` を投げてよい。空きを作るためにどの席にも接続がない対局を追い出してよく、そのため存在しない対局への `update` は `MatchError(MATCH_NOT_FOUND)` を投げる（インメモリ実装の上限と追い出しは §9.2）。DB 実装はこの上限の代わりに期限ベースの掃除（§8.3）で対局数を抑える |
 | 値として扱う | 返したレコードを後から変更しない。渡されたレコードへの参照を保持しない（インメモリ実装は `structuredClone` で守っている） |
 | 書き込みの直列化 | 1 インスタンスなら `MatchService` のロックで足りる。複数インスタンスにするなら `revision` による楽観ロック（保存済みの revision が `revision - 1` の行だけ更新）が必要 |
 | 復元時の検証 | DB から読んだ `state` は返す前に必ずエンジンの `stateError` で検査する（[GUNGI_RULES.md](./GUNGI_RULES.md) §12.1）。壊れた状態を渡すとエンジンが例外を投げうる |
@@ -680,8 +681,8 @@ DB 化の際の注意（コードからの帰結）:
 
 ### 8.3 waiting 対局の掃除（未実装）
 
-現在、時間ベースの掃除は **ない**。作成者が leave せずに切断した `waiting` 対局は、プロセスが再起動するまでメモリに残る（§10.2）。
-インメモリ実装では保存数の上限（§9.2）がメモリの無制限な増加だけを防いでいる。DB 化するとこれは再起動でも消えなくなるため、
+現在、時間ベースの掃除は **ない**。作成者が leave せずに切断した `waiting` 対局は、上限による追い出し（§9.2）かプロセスの再起動まで残る（§10.2）。
+インメモリ実装では保存数の上限と追い出し（§9.2）がメモリの無制限な増加だけを防いでいる。DB 化するとこれは再起動でも消えなくなるため、
 上限の代わりに次の方針で対応する:
 
 - 対局に期限（例: 最後の更新時刻からの放置期限）を保存し、起動時と定期的な見回りで期限切れの `waiting` 対局を削除する（§8.2 の「タイマー非依存」に従う）。
@@ -715,10 +716,15 @@ DB 化の際の注意（コードからの帰結）:
 | `MATCH_LIMIT_TOTAL` | `1000` | 保存する対局の総数（状態を問わない） |
 | `MATCH_LIMIT_WAITING` | `100` | 保存する `waiting` 対局の数 |
 
-- どちらかに達していると `match:create` は `MATCH_LIMIT` で失敗する。対局が削除される（§5.7）か、`waiting` 対局に参加者が来て `active` になれば、また作成できる。
+- 新しい対局が上限を超える場合、`insert` はまず **どの席にも接続が結び付いていない対局**（以下「無人の対局」）を、`updatedAt` が古い順に追い出して空きを作る。
+  - `waiting` の上限: 無人の `waiting` 対局を追い出す。
+  - 全体の上限: 無人の対局を状態を問わず追い出す。順序は `finished` → `waiting` → `active`（同じ状態の中では古い順）。
+  - どこかの席に接続がある対局は **追い出さない**。追い出しても空きが足りなければ何も追い出さず、`match:create` は `MATCH_LIMIT` で失敗する。
+- 追い出された対局への rejoin / join は `MATCH_NOT_FOUND`。**両者とも切断した `active` 対局も追い出されうる**（rejoinToken で戻れなくなる）。
+  上限に達したサーバーが再起動まで新規作成を受け付けなくなるよりはよい、という割り切り。追い出しと同時に進んでいた rejoin / join も `MATCH_NOT_FOUND` になる。
 - 値は正の整数。未設定・不正な値（`0`、負数、小数、数字以外）は既定値になる。`match.module.ts` で `ConfigService` から読む。
-- 件数の確認と保存は `insert` の中で `await` を挟まずに行うので、同時に作成されても上限を超えない。
-- 期限ベースの掃除がないため、作成者が切断した `waiting` 対局は上限の枠を占有し続ける（§10.2）。上限はメモリ保護のための暫定措置で、DB 化で期限ベースの掃除に置き換える（§8.3）。
+- 件数の確認・追い出し・保存は `insert` の中で `await` を挟まずに行うので、同時に作成されても上限を超えない。
+- 上限はメモリ保護のための暫定措置で、DB 化で期限ベースの掃除に置き換える（§8.3）。接続を開いたままにした対局は枠を占有し続ける（§10.2）。
 
 ### 9.3 nginx の `/socket.io/`
 
@@ -838,12 +844,19 @@ CI（`.github/workflows/ci.yml`）の compose スモークは現在 `/health` �
 - **時計なし**: 持ち時間・切れ負けはない。`MatchService.finishByServer`（`timeout` / `agreeDraw`）は将来のための配管で、どこからも呼ばれていない。
 - **対局の一覧・招待なし**: 参加には `matchId` を共有する必要がある（ロビー・招待は別機能）。
 - **保存はインメモリ**: サーバー再起動で全対局が消える（§8.2）。
-- **対局数の上限**: 既定で全体 1000 件・`waiting` 100 件まで。超えると create は `MATCH_LIMIT`（§9.2）。
+- **対局数の上限**: 既定で全体 1000 件・`waiting` 100 件まで。超えるときは無人の対局を追い出し、それでも足りなければ create は `MATCH_LIMIT`（§9.2）。
 - **1 インスタンス前提**: ロック（対局ごと・接続ごと）とルームはプロセス内（§6.1）。
 
-### 10.2 waiting 対局の滞留
+### 10.2 放置された対局と上限
 
-作成者が `match:leave` せずに切断（タブを閉じる等）した `waiting` 対局は削除されず、プロセス再起動まで残る。
+作成者が `match:leave` せずに切断（タブを閉じる等）した `waiting` 対局は削除されず、上限による追い出し（§9.2）かプロセス再起動まで残る。
 この対局には引き続き join でき、その場合は作成者が `connected: false` のまま `active` になる（作成者は rejoinToken で戻れる）。
-滞留した対局は `MATCH_LIMIT_WAITING` の枠も占有し続けるので、悪意のある大量作成では新規作成が `MATCH_LIMIT` で止まりうる（サーバーのメモリは守られる）。
+滞留した対局は上限に達するまで枠を占有するが、上限に達すると無人の対局から古い順に追い出される（§9.2）。そのため「作成して切断」を
+繰り返すだけでは新規作成を止められない。追い出しの代償として、切断したまま放置された対局（両者とも切断した `active` 対局を含む）は
+上限が逼迫すると消え、rejoin は `MATCH_NOT_FOUND` になる。
+
+**接続を開いたままにした対局は追い出されない**。多数の接続を張ったまま create（または create + join）すると、引き続き枠を占有して
+新規作成を `MATCH_LIMIT` で止めうる（サーバーのメモリは守られる）。本番での対策は nginx の `limit_conn` による IP ごとの同時接続数の制限
+（未対応。今後の課題）。
+
 FE は画面を離れるときに可能なら `match:leave` を送ること。根本対応は §8.3。

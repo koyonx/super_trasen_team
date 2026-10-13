@@ -52,8 +52,10 @@ const SIDES: readonly PlayerSide[] = ['black', 'white'];
  *
  * Matches are discarded when nobody can come back to them: a waiting match
  * left by its creator, or a finished match with no connected seat. There is
- * no time-based cleanup yet (no clocks in scope); a waiting match whose
- * creator disconnected stays until the process restarts.
+ * no time-based cleanup yet (no clocks in scope); a match whose seats are
+ * all disconnected stays until the repository evicts it to make room for a
+ * new one (`InMemoryMatchRepository`) or the process restarts. A request
+ * racing such an eviction fails with `MATCH_NOT_FOUND`.
  */
 @Injectable()
 export class MatchService {

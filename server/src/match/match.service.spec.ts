@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { legalMoves } from '@gungi/engine';
 import type { GameState } from '@gungi/engine';
 import { clientMoveSchema, rejoinTokenSchema } from '@gungi/shared';
@@ -315,6 +315,95 @@ describe('MatchService', () => {
 
       await limited.join(second.match.matchId, carol, 'c-carol');
       await expect(limited.create(alice, 'c-alice', options)).resolves.toBeDefined();
+    });
+
+    describe('eviction of unattended matches', () => {
+      const options = { side: 'black', firstPlayer: 'black' } as const;
+      let clock = Date.UTC(2026, 0, 1);
+
+      // Every service call gets a later `updatedAt`, so "oldest" is well defined.
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+      const tick = () => vi.setSystemTime((clock += 1000));
+
+      async function createAndDisconnect(svc: MatchService, n: number) {
+        tick();
+        const created = await svc.create(alice, `c-${n}`, options);
+        tick();
+        await svc.disconnect(created.match.matchId, `c-${n}`);
+        return created;
+      }
+
+      it('frees the waiting cap filled by creators that disconnected', async () => {
+        const store = new InMemoryMatchRepository({ total: 100, waiting: 3 });
+        const limited = new MatchService(store);
+        const abandoned = [];
+        for (let n = 0; n < 3; n++) abandoned.push(await createAndDisconnect(limited, n));
+
+        tick();
+        const victim = await limited.create(bob, 'c-bob', options);
+        expect(victim.match.status).toBe('waiting');
+        expect(store.size).toBe(3);
+        expect(await limited.get(abandoned[0]!.match.matchId)).toBeNull();
+        expect(await limited.get(abandoned[1]!.match.matchId)).not.toBeNull();
+
+        await expectCode(
+          limited.rejoin(abandoned[0]!.match.matchId, abandoned[0]!.you.rejoinToken, alice, 'c-a'),
+          'MATCH_NOT_FOUND',
+        );
+        const back = await limited.rejoin(
+          abandoned[1]!.match.matchId,
+          abandoned[1]!.you.rejoinToken,
+          alice,
+          'c-a',
+        );
+        expect(back.match.seats.black?.connected).toBe(true);
+      });
+
+      it('keeps waiting matches whose creator is connected', async () => {
+        const limited = new MatchService(new InMemoryMatchRepository({ total: 100, waiting: 2 }));
+        await limited.create(alice, 'c-1', options);
+        await limited.create(alice, 'c-2', options);
+        await expectCode(limited.create(bob, 'c-bob', options), 'MATCH_LIMIT');
+      });
+
+      it('frees the total cap filled by fully disconnected active matches', async () => {
+        const store = new InMemoryMatchRepository({ total: 2, waiting: 2 });
+        const limited = new MatchService(store);
+        const games = [];
+        for (let n = 0; n < 2; n++) {
+          tick();
+          const created = await limited.create(alice, `c-a${n}`, options);
+          await limited.join(created.match.matchId, bob, `c-b${n}`);
+          await limited.disconnect(created.match.matchId, `c-a${n}`);
+          await limited.disconnect(created.match.matchId, `c-b${n}`);
+          games.push(created);
+        }
+        expect((await limited.get(games[0]!.match.matchId))?.status).toBe('active');
+
+        tick();
+        await expect(limited.create(carol, 'c-carol', options)).resolves.toBeDefined();
+        expect(store.size).toBe(2);
+        await expectCode(
+          limited.rejoin(games[0]!.match.matchId, games[0]!.you.rejoinToken, alice, 'c-a'),
+          'MATCH_NOT_FOUND',
+        );
+        expect(await limited.get(games[1]!.match.matchId)).not.toBeNull();
+      });
+
+      it('never evicts an active match with one connected seat', async () => {
+        const limited = new MatchService(new InMemoryMatchRepository({ total: 1, waiting: 1 }));
+        const created = await limited.create(alice, 'c-alice', options);
+        await limited.join(created.match.matchId, bob, 'c-bob');
+        await limited.disconnect(created.match.matchId, 'c-alice');
+
+        await expectCode(limited.create(carol, 'c-carol', options), 'MATCH_LIMIT');
+        expect((await limited.get(created.match.matchId))?.status).toBe('active');
+      });
     });
   });
 

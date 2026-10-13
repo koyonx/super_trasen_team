@@ -23,7 +23,9 @@ export const MATCH_REPOSITORY = Symbol('MATCH_REPOSITORY');
  *    engine's `stateError` before returning it (docs/GUNGI_RULES.md §12.1):
  *    the engine may throw on a corrupt state.
  *  - `insert` may refuse a new match with `MatchError(MATCH_LIMIT)` when the
- *    store is at capacity; callers pass the code through to the client.
+ *    store is at capacity; callers pass the code through to the client. To
+ *    make room it may evict matches no live connection is bound to, so
+ *    `update` of a match that is gone throws `MatchError(MATCH_NOT_FOUND)`.
  *  - Correctness must not depend on process-local timers. Deadlines (move
  *    clocks, idle or disconnect timeouts) are to be stored with the match and
  *    restored on server boot, so a restart cannot silently drop them; any
@@ -61,15 +63,38 @@ function positiveInteger(raw: string | undefined): number | undefined {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+/** Eviction order under the total cap: finished first, then waiting, then active. */
+const EVICTION_PRIORITY: Readonly<Record<MatchRecord['status'], number>> = {
+  finished: 0,
+  waiting: 1,
+  active: 2,
+};
+
 /**
  * Process-memory store.
  *
- * Guest match creation is unauthenticated, so the store is capped: `insert`
- * fails with `MATCH_LIMIT` once `limits.total` matches or `limits.waiting`
- * waiting matches are stored. The count and the insert run synchronously
- * (no `await` in between), so concurrent creations cannot overshoot. The
- * database implementation replaces these caps with expiry-based cleanup of
- * stale matches (docs/WEBSOCKET.md §8.3).
+ * Guest match creation is unauthenticated, so the store is capped at
+ * `limits.total` matches and `limits.waiting` waiting matches. When a new
+ * match would exceed a cap, `insert` first evicts **unattended** matches (no
+ * seat bound to a live connection), oldest `updatedAt` first:
+ *  - waiting cap: unattended waiting matches;
+ *  - total cap: unattended matches of any status, finished before waiting
+ *    before active.
+ * A match with a connected seat is never evicted. Only if eviction cannot
+ * make room does `insert` fail with `MATCH_LIMIT`, and then nothing is
+ * evicted. Planning, evicting and inserting run synchronously (no `await` in
+ * between), so concurrent creations cannot overshoot.
+ *
+ * Trade-off: an unattended match is still reachable by `match:rejoin` (and a
+ * waiting one by `match:join`) until it is evicted; afterwards those requests
+ * get `MATCH_NOT_FOUND`. This includes a fully disconnected active match.
+ * Losing such a match under cap pressure is accepted over a store that stays
+ * full until restart. Matches whose connections are held open still occupy
+ * their slots; limiting connections per client (nginx `limit_conn`) is the
+ * mitigation for that.
+ *
+ * The database implementation replaces these caps with expiry-based cleanup
+ * of stale matches (docs/WEBSOCKET.md §8.3).
  */
 export class InMemoryMatchRepository implements MatchRepository {
   private readonly matches = new Map<string, MatchRecord>();
@@ -78,9 +103,9 @@ export class InMemoryMatchRepository implements MatchRepository {
 
   async insert(match: MatchRecord): Promise<void> {
     if (this.matches.has(match.id)) throw new Error(`duplicate match id ${match.id}`);
-    if (this.matches.size >= this.limits.total || this.waitingCount() >= this.limits.waiting) {
-      throw new MatchError(MatchErrorCode.MATCH_LIMIT);
-    }
+    const evictions = this.planEvictions(match);
+    if (!evictions) throw new MatchError(MatchErrorCode.MATCH_LIMIT);
+    for (const id of evictions) this.matches.delete(id);
     this.matches.set(match.id, structuredClone(match));
   }
 
@@ -89,8 +114,9 @@ export class InMemoryMatchRepository implements MatchRepository {
     return match ? structuredClone(match) : null;
   }
 
+  /** A match evicted while a caller held its record is reported as `MATCH_NOT_FOUND`. */
   async update(match: MatchRecord): Promise<void> {
-    if (!this.matches.has(match.id)) throw new Error(`unknown match id ${match.id}`);
+    if (!this.matches.has(match.id)) throw new MatchError(MatchErrorCode.MATCH_NOT_FOUND);
     this.matches.set(match.id, structuredClone(match));
   }
 
@@ -103,9 +129,40 @@ export class InMemoryMatchRepository implements MatchRepository {
     return this.matches.size;
   }
 
-  private waitingCount(): number {
-    let count = 0;
-    for (const match of this.matches.values()) if (match.status === 'waiting') count++;
-    return count;
+  /**
+   * Ids to evict so that `match` fits under both caps, or `null` when
+   * evicting every unattended candidate would still not make room.
+   */
+  private planEvictions(match: MatchRecord): string[] | null {
+    const stored = [...this.matches.values()];
+    const unattended = stored.filter(isUnattended).sort(byUpdatedAt);
+    const evicted = new Set<string>();
+
+    if (match.status === 'waiting') {
+      const waiting = stored.filter((m) => m.status === 'waiting').length;
+      const excess = waiting + 1 - this.limits.waiting;
+      const candidates = unattended.filter((m) => m.status === 'waiting');
+      if (excess > candidates.length) return null;
+      for (const m of candidates.slice(0, Math.max(excess, 0))) evicted.add(m.id);
+    }
+
+    const excess = stored.length - evicted.size + 1 - this.limits.total;
+    if (excess > 0) {
+      const candidates = unattended
+        .filter((m) => !evicted.has(m.id))
+        .sort((a, b) => EVICTION_PRIORITY[a.status] - EVICTION_PRIORITY[b.status]);
+      if (excess > candidates.length) return null;
+      for (const m of candidates.slice(0, excess)) evicted.add(m.id);
+    }
+    return [...evicted];
   }
+}
+
+/** No seat of the match is bound to a live connection. */
+function isUnattended(match: MatchRecord): boolean {
+  return !match.seats.black?.connectionId && !match.seats.white?.connectionId;
+}
+
+function byUpdatedAt(a: MatchRecord, b: MatchRecord): number {
+  return a.updatedAt < b.updatedAt ? -1 : a.updatedAt > b.updatedAt ? 1 : 0;
 }
