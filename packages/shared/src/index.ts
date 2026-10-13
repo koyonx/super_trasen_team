@@ -1,6 +1,7 @@
 /**
  * Shared constants and types used by client, server and gungi-engine.
- * Validation schemas (Zod) and the kifu file format will live here.
+ * Validation schemas (Zod) live here (see ./ws for the WebSocket match
+ * protocol); the kifu file format will follow.
  */
 
 export const BOARD_SIZE = 9;
@@ -24,3 +25,5 @@ export interface Position {
   /** 0-indexed tier in the stack, 0..MAX_STACK_HEIGHT-1 */
   tier: number;
 }
+
+export * from './ws';
