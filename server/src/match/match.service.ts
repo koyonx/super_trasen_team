@@ -48,7 +48,8 @@ const SIDES: readonly PlayerSide[] = ['black', 'white'];
  * seat's rejoin token while the match exists.
  *
  * Rejoining rebinds a guest-held seat to the presenting identity; a seat held
- * by an authenticated user is rebound only to that same user.
+ * by an authenticated user is rebound only to that same user. A connection
+ * (or user) already holding one seat cannot rejoin the other.
  *
  * Matches are discarded when nobody can come back to them: a waiting match
  * left by its creator, or a finished match with no connected seat. There is
@@ -123,6 +124,18 @@ export class MatchService {
         (identity.kind !== 'user' || identity.playerId !== seat.playerId)
       ) {
         throw new MatchError(MatchErrorCode.INVALID_REJOIN_TOKEN);
+      }
+
+      // One seat per connection, and per account: holding both seats would
+      // let one player move for both sides, and a disconnect would unbind
+      // only one of them.
+      const current = seatOf(match, connectionId);
+      if (current && current !== side) throw new MatchError(MatchErrorCode.ALREADY_SEATED);
+      if (
+        identity.kind === 'user' &&
+        SIDES.some((s) => s !== side && match.seats[s]?.playerId === identity.playerId)
+      ) {
+        throw new MatchError(MatchErrorCode.ALREADY_SEATED);
       }
 
       const previous = seat.connectionId;

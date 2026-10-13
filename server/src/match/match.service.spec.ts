@@ -295,6 +295,60 @@ describe('MatchService', () => {
       await expect(service.applyMove(id, 'c-alice2', marshal(4, 0))).resolves.toBeDefined();
     });
 
+    it('rejects a seated connection rejoining the other seat', async () => {
+      const { id, joined } = await activeMatch();
+      await service.disconnect(id, 'c-bob');
+
+      await expectCode(
+        service.rejoin(id, joined.you.rejoinToken, alice, 'c-alice'),
+        'ALREADY_SEATED',
+      );
+      const view = await service.get(id);
+      expect(view?.seats.black).toMatchObject({ playerId: 'guest_alice', connected: true });
+      expect(view?.seats.white).toMatchObject({ playerId: 'guest_bob', connected: false });
+
+      // No ghost connected seat: once alice is gone the finished match is discarded.
+      await service.applyMove(id, 'c-alice', { type: 'resign' });
+      const last = await service.disconnect(id, 'c-alice');
+      expect(last.match).toBeNull();
+      expect(repository.size).toBe(0);
+    });
+
+    it('rejects a user holding one seat rejoining the other from another connection', async () => {
+      const created = await service.create(dave, 'c-dave', { side: 'black', firstPlayer: 'black' });
+      const id = created.match.matchId;
+      const joined = await service.join(id, bob, 'c-bob');
+      await service.disconnect(id, 'c-bob');
+
+      await expectCode(
+        service.rejoin(id, joined.you.rejoinToken, dave, 'c-dave2'),
+        'ALREADY_SEATED',
+      );
+      await service.disconnect(id, 'c-dave');
+      await expectCode(
+        service.rejoin(id, joined.you.rejoinToken, dave, 'c-dave3'),
+        'ALREADY_SEATED',
+      );
+      expect((await service.get(id))?.seats.white?.playerId).toBe('guest_bob');
+
+      // Its own seat and a stranger's rejoin still work.
+      await expect(
+        service.rejoin(id, created.you.rejoinToken, dave, 'c-dave3'),
+      ).resolves.toMatchObject({ you: { side: 'black' } });
+      await expect(
+        service.rejoin(id, joined.you.rejoinToken, bob, 'c-bob2'),
+      ).resolves.toMatchObject({
+        you: { side: 'white' },
+      });
+    });
+
+    it('lets a connection rejoin the seat it already holds', async () => {
+      const { id, created } = await activeMatch();
+      const again = await service.rejoin(id, created.you.rejoinToken, alice, 'c-alice');
+      expect(again.you.side).toBe('black');
+      expect(again.replacedConnectionId).toBeNull();
+    });
+
     it('rejects detaching a connection without a seat', async () => {
       const { id } = await activeMatch();
       await expectCode(service.disconnect(id, 'c-carol'), 'NOT_SEATED');

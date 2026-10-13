@@ -262,7 +262,7 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
 | `MATCH_NOT_FOUND` | join / rejoin / move / leave の対象対局が存在しない（削除済み、上限による追い出し済み（§9.2）を含む） |
 | `MATCH_FULL` | join したが対局が `active`（両席とも埋まっている）。観戦はない |
 | `MATCH_NOT_ACTIVE` | move したが対局が `active` でない（`waiting` または `finished`）。join したが対局が `finished` |
-| `ALREADY_SEATED` | join した接続がすでにその対局の席に結び付いている、または同じ `playerId` がすでに席を持っている |
+| `ALREADY_SEATED` | join した接続がすでにその対局の席に結び付いている、または同じ `playerId` がすでに席を持っている。rejoin した接続がすでに **もう一方の** 席に結び付いている、または認証済みユーザーがもう一方の席を持っている（§5.5） |
 | `ALREADY_IN_MATCH` | create / join / rejoin した接続が、**別の未終了の** 対局に参加中 |
 | `NOT_SEATED` | move / leave した接続がその対局の席に結び付いていない（leave 後や `SEAT_TAKEN_OVER` 後を含む） |
 | `INVALID_REJOIN_TOKEN` | rejoinToken がどちらの席とも一致しない。または一致した席が認証済みユーザーの席で、要求元が同じユーザーでない（§5.5） |
@@ -275,6 +275,8 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
 `match:move` の検査順: スキーマ → `MATCH_NOT_FOUND` → `NOT_SEATED` → `NOT_YOUR_SIDE` → `MATCH_NOT_ACTIVE` → `STALE_PLY` → エンジン。
 
 `match:join` の検査順: スキーマ → `ALREADY_IN_MATCH`（§5.6）→ `MATCH_NOT_FOUND` → `ALREADY_SEATED` → `MATCH_NOT_ACTIVE`（`finished`）→ `MATCH_FULL`（`active`）。
+
+`match:rejoin` の検査順: スキーマ → `ALREADY_IN_MATCH`（§5.6）→ `MATCH_NOT_FOUND` → `INVALID_REJOIN_TOKEN`（不一致、またはユーザーの席を別の identity が要求）→ `ALREADY_SEATED`（§5.5）。
 
 ### 4.2 ルール違反（エンジンの `MoveError`、22 種）
 
@@ -363,6 +365,10 @@ e2e テストで `match:state` の JSON にトークン文字列が現れない�
   **認証済みユーザー（`kind: 'user'`）が持つ席** は、同じユーザー（同じ `playerId`）の接続にしか付け替えない。別のユーザーやゲストからは、
   トークンが正しくても `INVALID_REJOIN_TOKEN`（トークンが漏れても他のアカウントに席を渡さない）。席の identity の種別は `SeatRecord.kind` に保存される。
   rejoin は対局の状態（waiting / active / finished）を問わず、対局が存在する限り成功する（追い出し（§9.2）の後は `MATCH_NOT_FOUND`）。
+- **1 接続・1 アカウントにつき 1 席**: すでに一方の席に結び付いている接続が、もう一方の席のトークンで rejoin すると `ALREADY_SEATED`
+  （両方の席を持つと 1 人で両陣営を指せ、切断しても片方の席しか外れず `connected: true` の席が残ってしまうため）。
+  認証済みユーザー（`kind: 'user'`）は、別の接続からでも、自分の `playerId` がもう一方の席にあれば（接続の有無を問わず）`ALREADY_SEATED`。
+  自分がすでに持っている席への rejoin（同じ接続からの再送を含む）は従来どおり成功する。
 - 成功すると本人に ack と `match:state`、相手に `match:playerConnection`（`connected: true`、新しい `playerId`）が届く。
 - rejoinToken は対局中ずっと同じ値（rejoin しても再発行されない）。
 
