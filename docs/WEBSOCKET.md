@@ -158,14 +158,18 @@ socket.on('connect_error', (error) => {
 
 | イベント | フィールド | 型・制約 | 既定値 / 備考 |
 |---|---|---|---|
-| create | `side` | `'black' \| 'white' \| 'random'` | `'random'`。作成者の席 |
-| create | `firstPlayer` | `'black' \| 'white' \| 'random'` | `'random'`。先手（§9.1）。将来は帥落としの結果を渡す |
+| create | `side` | `'black' \| 'white' \| 'random'` | `'random'`。作成者の席。**友人対局専用**（下の注意） |
+| create | `firstPlayer` | `'black' \| 'white' \| 'random'` | `'random'`。先手（§9.1）。**友人対局専用**（下の注意） |
 | join / rejoin / move / leave | `matchId` | UUID 文字列 | — |
 | rejoin | `rejoinToken` | `^[A-Za-z0-9_-]{43}$`（32 バイトの base64url、パディングなし） | 形式違反は `INVALID_PAYLOAD`、形式は正しいが一致しなければ `INVALID_REJOIN_TOKEN` |
 | move | `move` | `clientMoveSchema`（下表） | — |
 | move | `ply` | 0 以上の整数 | 任意。送るなら表示中の `state.ply`（§6.2） |
 
 `match:create` はペイロードなし（`undefined`）でも `{}` でもよい。どちらも両方 `random` になる。
+
+> **公平性の注意**: `side` / `firstPlayer` は **クライアントが決める入力** であり、受け入れてよいのは両者が合意のうえで遊ぶ
+> 直接対局（友人対局）だけ。マッチメイキングやレート戦では、席と先手を **サーバー側** で決め（帥落としの儀式をサーバーの乱数で行う）、
+> クライアントが送った値は無視しなければならない（§8.4）。
 
 **`move`（`clientMoveSchema`）**: `type` で判別する union。未知のキーは取り除かれる。
 
@@ -676,6 +680,14 @@ DB 化するとこれは再起動でも消えなくなるため、次の方針�
 
 - 対局に期限（例: 最後の更新時刻からの放置期限）を保存し、起動時と定期的な見回りで期限切れの `waiting` 対局を削除する（§8.2 の「タイマー非依存」に従う）。
 - 削除はロック（`MatchService` 経由）の中で行い、同時に来た join と競合させない。
+
+### 8.4 先手・席の決定（マッチメイキング / レート戦）
+
+現在の `match:create` は友人対局向けで、作成者が `side` / `firstPlayer` を指定できる（§3.2）。これは作成者が自分に有利な条件を選べることを意味する。
+
+- マッチメイキングやレート戦を追加するときは、席と `firstPlayer` を **サーバーが決める**。帥落とし（§9.1）の儀式はサーバー側の乱数で行い、
+  結果を `MatchService` に渡す。クライアントの `side` / `firstPlayer` は受け取っても **無視** する。
+- そのような対局はクライアントの `match:create` からではなく、マッチング処理（サーバー内部）から作る想定。
 
 ---
 

@@ -228,13 +228,22 @@ export const handshakeAuthSchema = z.object({
 
 export type HandshakeAuth = z.infer<typeof handshakeAuthSchema>;
 
+/**
+ * `match:create` payload.
+ *
+ * Fairness: `side` and `firstPlayer` are client-controlled inputs. They are
+ * acceptable only for direct (friend) matches, where both players agree out
+ * of band. Matchmaking and rated flows MUST decide the seats and
+ * `firstPlayer` on the server (the 帥落とし ritual drawn with server-side
+ * RNG) and ignore any values a client sends.
+ */
 export const createMatchSchema = z
   .object({
-    /** The creator's side. Default `random`. */
+    /** The creator's side. Default `random`. Friend matches only (see above). */
     side: sideChoiceSchema.default('random'),
     /**
-     * §9.1 the side that places and moves first (先手). Default `random`; the
-     * 帥落とし ritual result will be passed here.
+     * §9.1 the side that places and moves first (先手). Default `random`.
+     * Friend matches only (see above): elsewhere the server-side ritual decides.
      */
     firstPlayer: sideChoiceSchema.default('random'),
   })
